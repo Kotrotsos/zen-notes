@@ -126,6 +126,15 @@
 
 /* Markdown preview defaults and table/link styling */
 @layer components {
+  /* Copilot block hover highlight in editor */
+  .copilot-block-hover {
+    background: color-mix(in oklab, var(--color-primary) 8%, transparent);
+  }
+  .copilot-block-selected {
+    background: color-mix(in oklab, var(--color-primary) 14%, transparent);
+    outline: 1px solid color-mix(in oklab, var(--color-primary) 35%, transparent);
+    outline-offset: -1px;
+  }
   .prose table {
     @apply w-full border-collapse text-sm;
   }

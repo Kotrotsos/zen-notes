@@ -195,7 +195,11 @@ export default function ZenNotes() {
     showGutter: true,
   })
   const editorRef = useRef(null)
-  const { theme } = useTheme()
+  const blockDecorationsRef = useRef<any>(null)
+  const blockSelectedDecorationsRef = useRef<any>(null)
+  const lastBlockRangeRef = useRef<{ start: number; end: number } | null>(null)
+  const hoverTimerRef = useRef<number | null>(null)
+  const { theme, resolvedTheme, setTheme } = useTheme()
   const dbRef = useRef<IDBDatabase | null>(null)
   const autoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const splitContainerRef = useRef<HTMLDivElement>(null)
@@ -216,7 +220,7 @@ export default function ZenNotes() {
     customCss: "",
     templates: [],
   })
-  const [settingsTab, setSettingsTab] = useState<'appearance' | 'editor' | 'preview' | 'ai'>('editor')
+  const [settingsTab, setSettingsTab] = useState<'appearance' | 'editor' | 'preview' | 'ai' | 'shortcuts'>('editor')
 
   const fontOptions = [
     { name: "JetBrains Mono", value: "JetBrains Mono" },
@@ -263,6 +267,7 @@ export default function ZenNotes() {
     userAgent: "ZenNotesCopilot/1.0 (+https://example.com)",
   })
   const SETTINGS_KEY = "zenNotes.settings.v1"
+  const UI_STATE_KEY = "zenNotes.uiState.v1"
 
   const [showAtReference, setShowAtReference] = useState(false)
   const [atReferencePosition, setAtReferencePosition] = useState({ x: 0, y: 0 })
@@ -642,6 +647,26 @@ export default function ZenNotes() {
     } catch {}
   }, [])
 
+  // Load UI state (explorer/copilot/split etc.) on first mount
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(UI_STATE_KEY)
+      if (raw) {
+        const parsed = JSON.parse(raw)
+        if (typeof parsed.showFileExplorer === "boolean") setShowFileExplorer(parsed.showFileExplorer)
+        if (typeof parsed.pinnedExplorer === "boolean") setPinnedExplorer(parsed.pinnedExplorer)
+        if (typeof parsed.showCopilot === "boolean") setShowCopilot(parsed.showCopilot)
+        if (typeof parsed.splitView === "boolean") setSplitView(parsed.splitView)
+        if (typeof parsed.showMarkdownPreview === "boolean") setShowMarkdownPreview(parsed.showMarkdownPreview)
+        if (typeof parsed.splitRatio === "number") setSplitRatio(parsed.splitRatio)
+        if (typeof parsed.settingsTab === "string") setSettingsTab(parsed.settingsTab)
+
+        // Ensure explorer is visible when pinned
+        if (parsed?.pinnedExplorer) setShowFileExplorer(true)
+      }
+    } catch {}
+  }, [])
+
   // Persist settings to localStorage whenever they change
   useEffect(() => {
     try {
@@ -654,13 +679,34 @@ export default function ZenNotes() {
     } catch {}
   }, [editorSettings, previewSettings, copilotSettings])
 
+  // Persist UI state to localStorage whenever it changes
+  useEffect(() => {
+    try {
+      const ui = {
+        showFileExplorer,
+        pinnedExplorer,
+        showCopilot,
+        splitView,
+        showMarkdownPreview,
+        splitRatio,
+        settingsTab,
+      }
+      localStorage.setItem(UI_STATE_KEY, JSON.stringify(ui))
+    } catch {}
+  }, [showFileExplorer, pinnedExplorer, showCopilot, splitView, showMarkdownPreview, splitRatio, settingsTab])
+
   const handleKeyDown = (e: KeyboardEvent) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === "e") {
+    // Unified shortcuts: require Ctrl + Command + key (no Shift)
+    const withCtrlCmd = e.metaKey && e.ctrlKey && !e.shiftKey && !e.altKey
+
+    // Explorer: Ctrl+Cmd+E
+    if (withCtrlCmd && (e.key === "e" || e.key === "E")) {
       e.preventDefault()
       setShowFileExplorer((prev) => !prev)
     }
 
-    if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+    // Copilot: Ctrl+Cmd+K
+    if (withCtrlCmd && (e.key === "k" || e.key === "K")) {
       e.preventDefault()
       setShowCopilot((prev) => {
         const newState = !prev
@@ -673,16 +719,16 @@ export default function ZenNotes() {
       })
     }
 
-    // Cmd/Ctrl + Shift + P: Toggle markdown preview overlay
-    if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === "P") {
+    // Preview overlay: Ctrl+Cmd+P
+    if (withCtrlCmd && (e.key === "p" || e.key === "P")) {
       e.preventDefault()
       setShowMarkdownPreview((prev) => !prev)
       setSplitView(false) // Close split view if open
       setShowCopilot(false)
     }
 
-    // Cmd/Ctrl + Shift + S: Toggle split view
-    if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === "S") {
+    // Split view: Ctrl+Cmd+S
+    if (withCtrlCmd && (e.key === "s" || e.key === "S")) {
       e.preventDefault()
       setSplitView((prev) => !prev)
       setShowMarkdownPreview(false) // Close preview overlay if open
@@ -834,11 +880,9 @@ export default function ZenNotes() {
         hideCursorInOverviewRuler: true,
         overviewRulerBorder: false,
         scrollbar: {
-          vertical: "hidden",
+          vertical: "auto",
           horizontal: "hidden",
-          verticalScrollbarSize: 0,
-          horizontalScrollbarSize: 0,
-          alwaysConsumeMouseWheel: false,
+          alwaysConsumeMouseWheel: true,
         },
         lineNumbers: editorSettings.showGutter ? (editorSettings.showLineNumbers ? "on" : "off") : "off",
         glyphMargin: editorSettings.showGutter,
@@ -848,7 +892,7 @@ export default function ZenNotes() {
         renderValidationDecorations: "off",
         automaticLayout: false, // Disable automatic layout to prevent conflicts
         fixedOverflowWidgets: true, // Prevent widget overflow issues
-        padding: { left: editorSettings.showGutter ? 0 : 16 }, // Remove left padding since gutter provides spacing
+        padding: { left: editorSettings.showGutter ? 0 : 16, bottom: 12 },
       })
 
       const monaco = (window as any).monaco
@@ -874,7 +918,7 @@ export default function ZenNotes() {
         })
 
         // Apply the custom theme
-        monaco.editor.setTheme(theme === "dark" ? "custom-vs-dark" : "custom-vs")
+        monaco.editor.setTheme(resolvedTheme === "dark" ? "custom-vs-dark" : "custom-vs")
       }
     }
   }, [
@@ -883,7 +927,7 @@ export default function ZenNotes() {
     editorSettings.fontFamily,
     editorSettings.showLineNumbers,
     editorSettings.showGutter,
-    theme,
+    resolvedTheme,
   ])
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId)
@@ -1042,6 +1086,8 @@ export default function ZenNotes() {
   const handleEditorDidMount = useCallback(
     (editor: any, monaco: any) => {
       editorRef.current = editor
+      blockDecorationsRef.current = editor.createDecorationsCollection()
+      blockSelectedDecorationsRef.current = editor.createDecorationsCollection()
 
       // Focus the editor immediately
       editor.focus()
@@ -1131,6 +1177,181 @@ export default function ZenNotes() {
         console.error("[v0] Failed to attach onKeyUp:", error)
       }
 
+      // Paragraph hover detection -> highlight only (no floating action)
+
+      const computeParagraphRange = (line: number) => {
+        const model = editor.getModel()
+        if (!model) return null
+        const lineCount = model.getLineCount()
+        const isBlank = (ln: number) => model.getLineContent(ln).trim() === ""
+        if (isBlank(line)) return null
+        let start = line
+        while (start > 1 && !isBlank(start - 1)) start--
+        let end = line
+        while (end < lineCount && !isBlank(end + 1)) end++
+        return { start, end }
+      }
+
+      const onMouseMove = (e: any) => {
+        const pos = e?.target?.position
+        if (!pos) {
+          blockDecorationsRef.current?.clear()
+          setShowCopilotButton(false)
+          lastBlockRangeRef.current = null
+          return
+        }
+        // If user has a selection, don't show hover affordance
+        const sel = editor.getSelection()
+        if (sel && !sel.isEmpty()) return
+        const range = computeParagraphRange(pos.lineNumber)
+        if (!range) {
+          blockDecorationsRef.current?.clear()
+          setShowCopilotButton(false)
+          lastBlockRangeRef.current = null
+          return
+        }
+        if (
+          lastBlockRangeRef.current &&
+          lastBlockRangeRef.current.start === range.start &&
+          lastBlockRangeRef.current.end === range.end
+        ) {
+          return
+        }
+        lastBlockRangeRef.current = range
+        blockDecorationsRef.current.set([
+          {
+            range: new monaco.Range(range.start, 1, range.end, 1),
+            options: { isWholeLine: true, className: "copilot-block-hover" },
+          },
+        ])
+
+        if (hoverTimerRef.current) window.clearTimeout(hoverTimerRef.current)
+      }
+
+      const onMouseLeave = () => {
+        blockDecorationsRef.current?.clear()
+        setShowCopilotButton(false)
+        lastBlockRangeRef.current = null
+      }
+
+      editor.onMouseMove(onMouseMove)
+      editor.onMouseLeave(onMouseLeave)
+
+      // Keep visual selection while the native context menu is open
+      editor.onContextMenu((e: any) => {
+        try {
+          const model = editor.getModel()
+          if (!model) return
+          const sel = editor.getSelection()
+          let rangeObj: any = null
+          if (sel && !sel.isEmpty()) {
+            rangeObj = sel
+          } else if (e?.target?.position) {
+            const r = computeParagraphRange(e.target.position.lineNumber)
+            if (r) {
+              rangeObj = new monaco.Range(r.start, 1, r.end, model.getLineMaxColumn(r.end))
+            }
+          }
+          if (rangeObj) {
+            const r = rangeObj
+            const decoRange = new monaco.Range(r.startLineNumber, 1, r.endLineNumber, 1)
+            blockSelectedDecorationsRef.current?.set([
+              { range: decoRange, options: { isWholeLine: true, className: "copilot-block-selected" } },
+            ])
+          }
+        } catch {}
+      })
+
+      // Context menu: Send block/selection to Copilot (prefill only)
+      editor.addAction({
+        id: "zen-copilot-send-block",
+        label: "Send to Copilot",
+        contextMenuGroupId: "navigation",
+        contextMenuOrder: 1.5,
+        run: () => {
+          try {
+            const model = editor.getModel()
+            if (!model) return
+            const sel = editor.getSelection()
+            let text = ""
+            let rangeObj: any = null
+            if (sel && !sel.isEmpty()) {
+              text = model.getValueInRange(sel)
+              rangeObj = sel
+            } else {
+              const pos = editor.getPosition()
+              if (!pos) return
+              const range = computeParagraphRange(pos.lineNumber)
+              if (!range) return
+              rangeObj = new monaco.Range(range.start, 1, range.end, model.getLineMaxColumn(range.end))
+              text = model.getValueInRange(rangeObj)
+            }
+            if (!text.trim()) return
+            if (rangeObj) {
+              const r = rangeObj
+              const decoRange = new monaco.Range(r.startLineNumber, 1, r.endLineNumber, 1)
+              blockSelectedDecorationsRef.current?.set([
+                { range: decoRange, options: { isWholeLine: true, className: "copilot-block-selected" } },
+              ])
+            }
+            setShowCopilot(true)
+            setSplitView(false)
+            setShowMarkdownPreview(false)
+            setCopilotInput(text)
+            // Keep editor focus so selection stays visible
+          } catch (e) {
+            console.error("Copilot prefill failed", e)
+          }
+        },
+      })
+
+      // Context menu: Ask Copilot now (auto-submit)
+      editor.addAction({
+        id: "zen-copilot-ask-block",
+        label: "Ask Copilot (send now)",
+        contextMenuGroupId: "navigation",
+        contextMenuOrder: 1.6,
+        run: () => {
+          try {
+            const model = editor.getModel()
+            if (!model) return
+            const sel = editor.getSelection()
+            let text = ""
+            let rangeObj: any = null
+            if (sel && !sel.isEmpty()) {
+              text = model.getValueInRange(sel)
+              rangeObj = sel
+            } else {
+              const pos = editor.getPosition()
+              if (!pos) return
+              const range = computeParagraphRange(pos.lineNumber)
+              if (!range) return
+              rangeObj = new monaco.Range(range.start, 1, range.end, model.getLineMaxColumn(range.end))
+              text = model.getValueInRange(rangeObj)
+            }
+            if (!text.trim()) return
+            if (rangeObj) {
+              const r = rangeObj
+              const decoRange = new monaco.Range(r.startLineNumber, 1, r.endLineNumber, 1)
+              blockSelectedDecorationsRef.current?.set([
+                { range: decoRange, options: { isWholeLine: true, className: "copilot-block-selected" } },
+              ])
+            }
+            setShowCopilot(true)
+            setSplitView(false)
+            setShowMarkdownPreview(false)
+            setCopilotInput(text)
+            setTimeout(() => {
+              try {
+                handleSendCopilotMessage()
+              } catch {}
+            }, 0)
+          } catch (e) {
+            console.error("Copilot ask failed", e)
+          }
+        },
+      })
+
       editor.onDidChangeCursorSelection((e: any) => {
         const selection = editor.getSelection()
         if (selection && !selection.isEmpty()) {
@@ -1153,6 +1374,7 @@ export default function ZenNotes() {
         } else {
           setShowCopilotButton(false)
           setSelectedText("")
+          blockSelectedDecorationsRef.current?.clear()
         }
       })
 
@@ -1217,7 +1439,7 @@ export default function ZenNotes() {
           hideCursorInOverviewRuler: true,
           overviewRulerBorder: false,
           scrollbar: {
-            alwaysConsumeMouseWheel: false,
+            alwaysConsumeMouseWheel: true,
           },
           lineNumbers: editorSettings.showGutter ? (editorSettings.showLineNumbers ? "on" : "off") : "off",
           glyphMargin: editorSettings.showGutter,
@@ -1229,6 +1451,7 @@ export default function ZenNotes() {
           fixedOverflowWidgets: true, // Prevent widget overflow issues
           padding: {
             left: editorSettings.showGutter ? (editorSettings.fullWidth ? 8 : 0) : 16,
+            bottom: 12,
           },
         })
       }
@@ -1241,6 +1464,8 @@ export default function ZenNotes() {
             window.removeEventListener("resize", handleResize)
           }
           clearTimeout(resizeTimeout)
+          blockDecorationsRef.current?.clear()
+          blockSelectedDecorationsRef.current?.clear()
         } catch (error) {
           // Silently handle cleanup errors
         }
@@ -1926,7 +2151,7 @@ export default function ZenNotes() {
           onClick={() => setShowFileExplorer(true)}
           onMouseEnter={handleExplorerMouseEnter}
           className="fixed left-0 top-1/2 -translate-y-1/2 w-1 h-12 bg-muted-foreground/30 hover:bg-muted-foreground/50 hover:w-3 transition-all duration-200 z-30 rounded-r-sm"
-          title="Open Explorer (⌘E)"
+          title="Open Explorer (⌃⌘E)"
         />
       )}
 
@@ -2065,7 +2290,7 @@ export default function ZenNotes() {
               }
             }}
             className={`p-2 hover:bg-muted/40 rounded ${showCopilot ? "bg-muted" : ""}`}
-            title="Toggle Copilot (⌘K)"
+            title="Toggle Copilot (⌃⌘K)"
           >
             <MessageSquare size={16} />
           </button>
@@ -2076,7 +2301,7 @@ export default function ZenNotes() {
               setShowCopilot(false)
             }}
             className={`p-2 hover:bg-muted/40 rounded ${showMarkdownPreview ? "bg-muted" : ""}`}
-            title="Toggle Preview (⌘⇧P)"
+            title="Toggle Preview (⌃⌘P)"
           >
             <Eye size={16} />
           </button>
@@ -2087,7 +2312,7 @@ export default function ZenNotes() {
               setShowCopilot(false)
             }}
             className={`p-2 hover:bg-muted/40 rounded ${splitView ? "bg-muted" : ""}`}
-            title="Toggle Split View (⌘⇧S)"
+            title="Toggle Split View (⌃⌘S)"
           >
             <EyeOff size={16} />
           </button>
@@ -2096,7 +2321,9 @@ export default function ZenNotes() {
 
       {/* Editor and Split View */}
       {/* Adjust main content margin when explorer is pinned */}
-      <div className={`flex-1 flex flex-col transition-all duration-300 ${pinnedExplorer ? "ml-64" : "ml-0"} overflow-hidden`}>
+      <div
+        className={`flex-1 flex flex-col transition-all duration-300 ${pinnedExplorer ? "ml-64" : "ml-0"} overflow-hidden`}
+      >
         <div
           ref={splitContainerRef}
           className={`${
@@ -2112,17 +2339,18 @@ export default function ZenNotes() {
                 height="100%"
                 width="100%"
                 language="markdown"
-                theme={theme === "dark" ? "custom-vs-dark" : "custom-vs"} // Use custom theme with dimmed line numbers
+                theme={resolvedTheme === "dark" ? "custom-vs-dark" : "custom-vs"} // Use custom theme with dimmed line numbers
                 value={activeTab?.content || ""}
                 onChange={handleChange}
                 onMount={handleEditorDidMount}
                 options={{
                   automaticLayout: false,
                   scrollbar: {
-                    alwaysConsumeMouseWheel: false,
+                    alwaysConsumeMouseWheel: true,
                   },
                   padding: {
                     left: editorSettings.showGutter ? (editorSettings.fullWidth ? 8 : 0) : 16,
+                    bottom: 12,
                   },
                 }}
               />
@@ -2591,6 +2819,49 @@ export default function ZenNotes() {
           </SettingsTabsContext.Provider>
 
           <div className="space-y-4 mt-3">
+            {settingsTab === 'appearance' && (
+            <div>
+              <h4 className="font-semibold text-xs mb-2">Appearance</h4>
+              <div className="flex items-center gap-4">
+                <label className="flex items-center gap-2 text-xs font-medium">
+                  <input
+                    type="radio"
+                    name="theme-mode"
+                    value="light"
+                    checked={theme === 'light'}
+                    onChange={() => setTheme('light')}
+                    className="rounded"
+                  />
+                  Light
+                </label>
+                <label className="flex items-center gap-2 text-xs font-medium">
+                  <input
+                    type="radio"
+                    name="theme-mode"
+                    value="dark"
+                    checked={theme === 'dark'}
+                    onChange={() => setTheme('dark')}
+                    className="rounded"
+                  />
+                  Dark
+                </label>
+                <label className="flex items-center gap-2 text-xs font-medium">
+                  <input
+                    type="radio"
+                    name="theme-mode"
+                    value="system"
+                    checked={theme === 'system' || !theme}
+                    onChange={() => setTheme('system')}
+                    className="rounded"
+                  />
+                  System
+                </label>
+              </div>
+              <p className="text-[11px] text-muted-foreground mt-2">
+                Applies across the app, including editor and preview. Current: {resolvedTheme || theme}
+              </p>
+            </div>
+            )}
             {settingsTab === 'editor' && (
             <div>
               <label className="block text-xs font-medium mb-2">Font Family</label>
@@ -2605,6 +2876,35 @@ export default function ZenNotes() {
                   </option>
                 ))}
               </select>
+            </div>
+            )}
+
+            {settingsTab === 'shortcuts' && (
+            <div>
+              <h4 className="font-semibold text-xs mb-2">Keyboard Shortcuts</h4>
+              <div className="space-y-1 text-xs">
+                <div className="flex items-center justify-between border rounded px-2 py-1">
+                  <span>Toggle Explorer</span>
+                  <span className="font-mono">⌃⌘E</span>
+                </div>
+                <div className="flex items-center justify-between border rounded px-2 py-1">
+                  <span>Toggle Copilot</span>
+                  <span className="font-mono">⌃⌘K</span>
+                </div>
+                <div className="flex items-center justify-between border rounded px-2 py-1">
+                  <span>Toggle Preview Overlay</span>
+                  <span className="font-mono">⌃⌘P</span>
+                </div>
+                <div className="flex items-center justify-between border rounded px-2 py-1">
+                  <span>Toggle Split View</span>
+                  <span className="font-mono">⌃⌘S</span>
+                </div>
+                <div className="flex items-center justify-between border rounded px-2 py-1">
+                  <span>Close dialogs/overlays</span>
+                  <span className="font-mono">Esc</span>
+                </div>
+              </div>
+              <p className="text-[11px] text-muted-foreground mt-2">Shortcuts require holding Control and Command together.</p>
             </div>
             )}
 
@@ -2831,7 +3131,7 @@ export default function ZenNotes() {
 
       {/* Status Bar */}
       <div
-        className={`fixed bottom-0 right-0 h-12 border-t border-border bg-background px-0 py-0 flex justify-between items-center text-xs font-mono text-muted-foreground transition-all duration-300 ${pinnedExplorer ? "left-64" : "left-0"}`}
+        className={`sticky bottom-0 h-12 border-t border-border bg-background px-0 py-0 flex justify-between items-center text-xs font-mono text-muted-foreground transition-all duration-300 ${pinnedExplorer ? "ml-64" : "ml-0"}`}
       >
         <div className="flex items-center gap-6 h-full">
           <button
@@ -3013,9 +3313,11 @@ function SettingsTabs() {
   return (
     <div className="inline-flex border rounded overflow-hidden text-xs">
       {([
+        ['appearance', 'Appearance'],
         ['editor', 'Editor'],
         ['preview', 'Preview'],
         ['ai', 'AI'],
+        ['shortcuts', 'Shortcuts'],
       ] as const).map(([key, label]) => (
         <button
           key={key}
