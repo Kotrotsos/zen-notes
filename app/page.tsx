@@ -30,9 +30,15 @@ import {
   Pin,
   FileText,
   Wrench,
+  Columns,
+  Rows,
 } from "lucide-react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from "@/components/ui/select"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 
 interface Tab {
   id: string
@@ -176,11 +182,12 @@ export default function ZenNotes() {
     pinnedExplorer?: boolean
     showCopilot?: boolean
     showWorkbench?: boolean
-    workbenchTool?: 'script' | 'regex'
     workbenchScript?: string
-    regexPattern?: string
-    regexFlags?: string
-    regexReplacement?: string
+    wbUseSelection?: boolean
+    wbAllTabs?: boolean
+    workbenchPreviewBelow?: boolean
+    workbenchSplitRatio?: number
+    workbenchActiveScriptId?: string | null
     splitView?: boolean
     showMarkdownPreview?: boolean
     splitRatio?: number
@@ -286,9 +293,7 @@ export default function ZenNotes() {
   const [showWorkbench, setShowWorkbench] = useState(
     () => (typeof initialUI.showWorkbench === "boolean" ? initialUI.showWorkbench : false),
   )
-  const [workbenchTool, setWorkbenchTool] = useState<'script' | 'regex'>(
-    () => ((initialUI.workbenchTool === 'regex' || initialUI.workbenchTool === 'script') ? initialUI.workbenchTool : 'script') as 'script' | 'regex',
-  )
+  const [workbenchTool, setWorkbenchTool] = useState<'script' | 'regex' | 'merge'>('script')
   const DEFAULT_EXAMPLE_SCRIPT = `// Define a transform function that receives the current file content
 // and returns the transformed content as a string.
 // You can also use the provided context: { filename }
@@ -330,9 +335,85 @@ function transform(input, context) {
       ? (initialUI.workbenchScript as string)
       : DEFAULT_EXAMPLE_SCRIPT),
   )
-  const [regexPattern, setRegexPattern] = useState<string>(() => (typeof initialUI.regexPattern === 'string' ? initialUI.regexPattern as string : ''))
-  const [regexFlags, setRegexFlags] = useState<string>(() => (typeof initialUI.regexFlags === 'string' ? (initialUI.regexFlags as string) : 'g'))
-  const [regexReplacement, setRegexReplacement] = useState<string>(() => (typeof initialUI.regexReplacement === 'string' ? initialUI.regexReplacement as string : ''))
+  // Saved scripts CRUD
+  type SavedScript = { id: string; name: string; code: string; updatedAt: string }
+  const SCRIPTS_KEY = 'zenNotes.scripts.v1'
+  const [savedScripts, setSavedScripts] = useState<SavedScript[]>([])
+  const [activeScriptId, setActiveScriptId] = useState<string | null>(() => (typeof initialUI.workbenchActiveScriptId === 'string' ? (initialUI.workbenchActiveScriptId as string) : null))
+  const [scriptName, setScriptName] = useState<string>('Untitled')
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(SCRIPTS_KEY)
+      if (raw) {
+        const parsed = JSON.parse(raw)
+        if (Array.isArray(parsed)) setSavedScripts(parsed)
+        // If active id is set, hydrate editor and name from it
+        if (activeScriptId) {
+          const found = parsed.find((s: SavedScript) => s.id === activeScriptId)
+          if (found) {
+            setWorkbenchScript(found.code)
+            setScriptName(found.name)
+          }
+        }
+      }
+    } catch {}
+  }, [])
+  useEffect(() => {
+    try { localStorage.setItem(SCRIPTS_KEY, JSON.stringify(savedScripts)) } catch {}
+  }, [savedScripts])
+  const [wbUseSelection, setWbUseSelection] = useState<boolean>(() => (typeof initialUI.wbUseSelection === 'boolean' ? !!initialUI.wbUseSelection : false))
+  const [wbAllTabs, setWbAllTabs] = useState<boolean>(() => (typeof initialUI.wbAllTabs === 'boolean' ? !!initialUI.wbAllTabs : false))
+  const [wbPreviewBelow, setWbPreviewBelow] = useState<boolean>(() => (typeof initialUI.workbenchPreviewBelow === 'boolean' ? !!initialUI.workbenchPreviewBelow : false))
+  const [wbSplitRatio, setWbSplitRatio] = useState<number>(() => (typeof initialUI.workbenchSplitRatio === 'number' ? (initialUI.workbenchSplitRatio as number) : 0.5))
+  const wbContainerRef = useRef<HTMLDivElement>(null)
+  const [wbIsDragging, setWbIsDragging] = useState(false)
+  const handleWbMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault()
+    setWbIsDragging(true)
+  }
+  const handleWbMouseMove = (e: MouseEvent) => {
+    if (!wbIsDragging || !wbContainerRef.current) return
+    const rect = wbContainerRef.current.getBoundingClientRect()
+    let ratio = 0.5
+    if (wbPreviewBelow) {
+      ratio = (e.clientY - rect.top) / rect.height
+    } else {
+      ratio = (e.clientX - rect.left) / rect.width
+    }
+    ratio = Math.max(0.2, Math.min(0.8, ratio))
+    setWbSplitRatio(ratio)
+  }
+  const handleWbMouseUp = () => setWbIsDragging(false)
+  useEffect(() => {
+    if (!wbIsDragging) return
+    document.addEventListener('mousemove', handleWbMouseMove)
+    document.addEventListener('mouseup', handleWbMouseUp)
+    document.body.style.cursor = wbPreviewBelow ? 'row-resize' : 'col-resize'
+    document.body.style.userSelect = 'none'
+    return () => {
+      document.removeEventListener('mousemove', handleWbMouseMove)
+      document.removeEventListener('mouseup', handleWbMouseUp)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+  }, [wbIsDragging, wbPreviewBelow])
+  // Hidden legacy for backward compat
+  const [selectionPattern, setSelectionPattern] = useState<string>('')
+  const [selectionFlags, setSelectionFlags] = useState<string>('m')
+  // Hidden legacy tool state (disabled in UI) so code compiles
+  const [regexPattern, setRegexPattern] = useState<string>('')
+  const [regexFlags, setRegexFlags] = useState<string>('g')
+  const [regexReplacement, setRegexReplacement] = useState<string>('')
+  const [mergeCsvText, setMergeCsvText] = useState<string>('')
+  const [mergeSelectedRow, setMergeSelectedRow] = useState<number>(0)
+  const [mergeDataMode, setMergeDataMode] = useState<'csv' | 'json'>('csv')
+  const [mergeJsonText, setMergeJsonText] = useState<string>('')
+  const [mergeBatch, setMergeBatch] = useState<boolean>(false)
+  const [mergeFilenameTemplate, setMergeFilenameTemplate] = useState<string>('{{name}}.md')
+  const [mergeDownload, setMergeDownload] = useState<boolean>(false)
+  const [mergeCreateTabs, setMergeCreateTabs] = useState<boolean>(false)
+  const [mergeFolderTemplate, setMergeFolderTemplate] = useState<string>('Default')
+  const [mergePreviewCount, setMergePreviewCount] = useState<number>(5)
   const [workbenchResult, setWorkbenchResult] = useState<string>("")
   const [copilotInput, setCopilotInput] = useState("")
   const [buttonPosition, setButtonPosition] = useState({ x: 0, y: 0 })
@@ -763,11 +844,12 @@ function transform(input, context) {
         pinnedExplorer,
         showCopilot,
         showWorkbench,
-        workbenchTool,
         workbenchScript,
-        regexPattern,
-        regexFlags,
-        regexReplacement,
+        wbUseSelection,
+        wbAllTabs,
+        workbenchPreviewBelow: wbPreviewBelow,
+        workbenchSplitRatio: wbSplitRatio,
+        workbenchActiveScriptId: activeScriptId,
         splitView,
         showMarkdownPreview,
         splitRatio,
@@ -775,7 +857,7 @@ function transform(input, context) {
       }
       localStorage.setItem(UI_STATE_KEY, JSON.stringify(ui))
     } catch {}
-  }, [showFileExplorer, pinnedExplorer, showCopilot, showWorkbench, workbenchTool, workbenchScript, regexPattern, regexFlags, regexReplacement, splitView, showMarkdownPreview, splitRatio, settingsTab])
+  }, [showFileExplorer, pinnedExplorer, showCopilot, showWorkbench, workbenchScript, wbUseSelection, wbAllTabs, wbPreviewBelow, wbSplitRatio, activeScriptId, splitView, showMarkdownPreview, splitRatio, settingsTab])
 
   const handleKeyDown = (e: KeyboardEvent) => {
     // Unified shortcuts: require Ctrl + Command + key (no Shift)
@@ -2668,22 +2750,20 @@ function transform(input, context) {
                   <div className="flex items-center gap-3">
                     <Wrench size={16} className="text-gray-700" />
                     <h3 className="font-semibold text-sm text-gray-800">Workbench</h3>
-                    <div className="ml-2 flex items-center gap-2">
-                      <button
-                        className={`text-xs px-2 py-1 rounded border ${workbenchTool === 'script' ? 'bg-white' : 'bg-gray-100'}`}
-                        onClick={() => setWorkbenchTool('script')}
-                        title="Use a JavaScript transform"
-                      >
-                        Script Transform
-                      </button>
-                      <button
-                        className={`text-xs px-2 py-1 rounded border ${workbenchTool === 'regex' ? 'bg-white' : 'bg-gray-100'}`}
-                        onClick={() => setWorkbenchTool('regex')}
-                        title="Find/replace using RegExp"
-                      >
-                        Regex Replace
-                      </button>
-                    </div>
+                    <div className="ml-2 flex items-center gap-2 text-xs text-gray-600" />
+                  </div>
+                  <div className="ml-auto flex items-center gap-3">
+                    <label className="text-[11px] text-gray-600 flex items-center gap-2" title="If checked, operate only on current selection (for other tabs, full document)">
+                      <input type="checkbox" className="accent-current" checked={wbUseSelection} onChange={(e) => setWbUseSelection(e.target.checked)} />
+                      <span>Use selection</span>
+                    </label>
+                    <label className="text-[11px] text-gray-600 flex items-center gap-2" title="If checked, Apply affects all open tabs">
+                      <input type="checkbox" className="accent-current" checked={wbAllTabs} onChange={(e) => setWbAllTabs(e.target.checked)} />
+                      <span>All tabs</span>
+                    </label>
+                    <Button variant="ghost" size="sm" onClick={() => setWbPreviewBelow((v) => !v)} title={wbPreviewBelow ? 'Preview side-by-side' : 'Preview below'}>
+                      {wbPreviewBelow ? <Columns size={16} /> : <Rows size={16} />}
+                    </Button>
                   </div>
                   <button
                     onClick={() => setShowWorkbench(false)}
@@ -2694,30 +2774,287 @@ function transform(input, context) {
                   </button>
                 </div>
 
-                {/* Workbench Body */}
-                {workbenchTool === 'script' && (
-                  <div className="flex-1 min-h-0 flex">
-                    <div className="w-1/2 min-w-[40%] border-r border-gray-200 flex flex-col">
+                {/* Workbench Body: Script Transform */}
+                {
+                  wbPreviewBelow ? (
+                    <div className="flex-1 min-h-0 flex flex-col" ref={wbContainerRef}>
+                      <div className="flex flex-col border-b border-gray-200" style={{ height: `${wbSplitRatio * 100}%` }}>
+                        <div className="px-3 py-2 border-b bg-white flex items-center gap-2">
+                          <label className="text-xs text-gray-600">Script</label>
+                          <select
+                            className="text-xs border rounded px-2 py-1 bg-white"
+                            value={activeScriptId || ''}
+                            onChange={(e) => {
+                              const id = e.target.value || null
+                              setActiveScriptId(id)
+                              if (id) {
+                                const found = savedScripts.find((s) => s.id === id)
+                                if (found) { setWorkbenchScript(found.code); setScriptName(found.name) }
+                              } else {
+                                setScriptName('Untitled')
+                                setWorkbenchScript(DEFAULT_EXAMPLE_SCRIPT)
+                              }
+                            }}
+                          >
+                            <option value="">— Unsaved —</option>
+                            {savedScripts.map((s) => (
+                              <option key={s.id} value={s.id}>{s.name}</option>
+                            ))}
+                          </select>
+                          <input
+                            className="text-xs border rounded px-2 py-1 bg-white w-40"
+                            placeholder="Name"
+                            value={scriptName}
+                            onChange={(e) => setScriptName(e.target.value)}
+                          />
+                          <div className="ml-auto flex items-center gap-2">
+                            <button
+                              className="text-xs px-2 py-1 border rounded bg-white hover:bg-gray-50"
+                              onClick={() => {
+                                setActiveScriptId(null)
+                                setScriptName('Untitled')
+                                setWorkbenchScript(DEFAULT_EXAMPLE_SCRIPT)
+                              }}
+                              title="New script"
+                            >
+                              New
+                            </button>
+                            <button
+                              className="text-xs px-2 py-1 border rounded bg-white hover:bg-gray-50"
+                              onClick={() => {
+                                const name = scriptName.trim() || 'Untitled'
+                                if (activeScriptId) {
+                                  setSavedScripts((prev) => prev.map((s) => (s.id === activeScriptId ? { ...s, name, code: workbenchScript, updatedAt: new Date().toISOString() } : s)))
+                                } else {
+                                  const id = `script-${Date.now()}-${Math.random().toString(36).slice(2,8)}`
+                                  const rec: SavedScript = { id, name, code: workbenchScript, updatedAt: new Date().toISOString() }
+                                  setSavedScripts((prev) => [...prev, rec])
+                                  setActiveScriptId(id)
+                                }
+                              }}
+                              title="Save script"
+                            >
+                              Save
+                            </button>
+                            <button
+                              className="text-xs px-2 py-1 border rounded bg-white hover:bg-gray-50 disabled:opacity-50"
+                              disabled={!activeScriptId}
+                              onClick={() => {
+                                if (!activeScriptId) return
+                                setSavedScripts((prev) => prev.filter((s) => s.id !== activeScriptId))
+                                setActiveScriptId(null)
+                              }}
+                              title="Delete script"
+                            >
+                              Delete
+                            </button>
+                            <button
+                              className="text-xs px-2 py-1 border rounded bg-white hover:bg-gray-50"
+                              onClick={() => {
+                                try {
+                                  const code = `${workbenchScript}\n; if (typeof transform !== 'function') { throw new Error('Define function transform(input, context)') }`
+                                  // eslint-disable-next-line no-new-func
+                                  new Function('input','context', `${workbenchScript}; return true;`)
+                                } catch {}
+                              }}
+                              title="Quick-check script compiles"
+                            >
+                              Check
+                            </button>
+                            <button
+                              className="text-xs px-2 py-1 border rounded bg-white hover:bg-gray-50"
+                              onClick={() => {
+                                const full = activeTab?.content || ''
+                                let input = full
+                                if (wbUseSelection && editorRef.current) {
+                                  const editor = editorRef.current as any
+                                  const model = editor.getModel()
+                                  const sel = editor.getSelection()
+                                  if (sel && !sel.isEmpty()) {
+                                    input = model.getValueInRange(sel)
+                                  }
+                                }
+                                try {
+                                  // eslint-disable-next-line no-new-func
+                                  const fn = new Function(
+                                    'input',
+                                    'context',
+                                    `${workbenchScript}; if (typeof transform !== 'function') { throw new Error('Define function transform(input, context)') } return String(transform(input, context));`,
+                                  ) as (input: string, context: { filename?: string }) => string
+                                  const output = fn(input, { filename: activeTab?.name })
+                                  setWorkbenchResult(output)
+                                } catch (err: any) {
+                                  setWorkbenchResult(`/* Transform error: ${err?.message || String(err)} */\n`)
+                                }
+                              }}
+                              title="Run transform on current file"
+                            >
+                              Run
+                            </button>
+                            <button
+                              className="text-xs px-2 py-1 border rounded bg-white hover:bg-gray-50"
+                              onClick={() => {
+                                // Compile transformer once
+                                let fn: ((input: string, context: { filename?: string }) => string) | null = null
+                                try {
+                                  // eslint-disable-next-line no-new-func
+                                  fn = new Function(
+                                    'input',
+                                    'context',
+                                    `${workbenchScript}; if (typeof transform !== 'function') { throw new Error('Define function transform(input, context)') } return String(transform(input, context));`,
+                                  ) as any
+                                } catch (err) {
+                                  return
+                                }
+                                if (!fn) return
+
+                                const applyActiveWithSelectionIfAny = (content: string): string => {
+                                  if (wbUseSelection && editorRef.current) {
+                                    const editor = editorRef.current as any
+                                    const model = editor.getModel()
+                                    const sel = editor.getSelection()
+                                    if (sel && !sel.isEmpty()) {
+                                      const start = model.getOffsetAt(sel.getStartPosition())
+                                      const end = model.getOffsetAt(sel.getEndPosition())
+                                      const snippet = model.getValueInRange(sel)
+                                      const out = fn(snippet, { filename: activeTab?.name })
+                                      const before = content.slice(0, start)
+                                      const after = content.slice(end)
+                                      return before + out + after
+                                    }
+                                  }
+                                  return fn(content, { filename: activeTab?.name })
+                                }
+
+                                if (wbAllTabs) {
+                                  setTabs((prev) => prev.map((t) => {
+                                    if (t.id === activeTabId) {
+                                      return { ...t, content: applyActiveWithSelectionIfAny(t.content) }
+                                    }
+                                    const out = fn!(t.content, { filename: t.name })
+                                    return { ...t, content: out }
+                                  }))
+                                } else {
+                                  if (!activeTab?.id) return
+                                  setTabs((prev) => prev.map((t) => (t.id === activeTabId ? { ...t, content: applyActiveWithSelectionIfAny(t.content) } : t)))
+                                }
+                              }}
+                              title="Replace the current editor content with the result"
+                            >
+                              Apply
+                            </button>
+                          </div>
+                        </div>
+                        <div className="flex-1 min-h-0">
+                          <Editor
+                            height="100%"
+                            width="100%"
+                            language="javascript"
+                            theme={resolvedTheme === 'dark' ? 'custom-vs-dark' : 'custom-vs'}
+                            value={workbenchScript}
+                            onChange={(v) => setWorkbenchScript(v || '')}
+                            options={{ minimap: { enabled: false }, fontSize: 13, wordWrap: 'on', scrollBeyondLastLine: false }}
+                          />
+                        </div>
+                      </div>
+                      <div
+                        className={`h-2 cursor-row-resize flex-shrink-0 relative group ${wbIsDragging ? 'bg-primary/40' : ''}`}
+                        onMouseDown={handleWbMouseDown}
+                      >
+                        <div className="absolute inset-x-0 top-1 h-px bg-border group-hover:bg-primary/60 transition-colors" />
+                      </div>
+                      <div className="flex-1 min-h-0 flex flex-col" style={{ height: `${(1 - wbSplitRatio) * 100}%` }}>
+                        <div className="px-3 py-2 border-b bg-white text-xs text-gray-600 flex items-center justify-between">
+                          <span>Result Preview</span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-gray-400">{activeTab?.name || 'Untitled'}</span>
+                          </div>
+                        </div>
+                        <div className="flex-1 min-h-0">
+                          <Editor
+                            height="100%"
+                            width="100%"
+                            language="markdown"
+                            theme={resolvedTheme === 'dark' ? 'custom-vs-dark' : 'custom-vs'}
+                            value={workbenchResult}
+                            onChange={() => undefined}
+                            options={{ readOnly: true, minimap: { enabled: false }, wordWrap: 'on', scrollBeyondLastLine: false }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex-1 min-h-0 flex" ref={wbContainerRef}>
+                    <div className="border-r border-gray-200 flex flex-col" style={{ width: `${wbSplitRatio * 100}%` }}>
                       <div className="px-3 py-2 border-b bg-white flex items-center gap-2">
-                        <label className="text-xs text-gray-600">Example</label>
+                        <label className="text-xs text-gray-600">Script</label>
                         <select
                           className="text-xs border rounded px-2 py-1 bg-white"
+                          value={activeScriptId || ''}
                           onChange={(e) => {
-                            const found = exampleScripts.find((s) => s.id === e.target.value)
-                            if (found) setWorkbenchScript(found.code)
+                            const id = e.target.value || null
+                            setActiveScriptId(id)
+                            if (id) {
+                              const found = savedScripts.find((s) => s.id === id)
+                              if (found) { setWorkbenchScript(found.code); setScriptName(found.name) }
+                            } else {
+                              setScriptName('Untitled')
+                              setWorkbenchScript(DEFAULT_EXAMPLE_SCRIPT)
+                            }
                           }}
-                          defaultValue=""
                         >
-                          <option value="" disabled>
-                            Choose example…
-                          </option>
-                          {exampleScripts.map((ex) => (
-                            <option key={ex.id} value={ex.id}>
-                              {ex.name}
-                            </option>
+                          <option value="">— Unsaved —</option>
+                          {savedScripts.map((s) => (
+                            <option key={s.id} value={s.id}>{s.name}</option>
                           ))}
                         </select>
+                        <input
+                          className="text-xs border rounded px-2 py-1 bg-white w-40"
+                          placeholder="Name"
+                          value={scriptName}
+                          onChange={(e) => setScriptName(e.target.value)}
+                        />
                         <div className="ml-auto flex items-center gap-2">
+                          <button
+                            className="text-xs px-2 py-1 border rounded bg-white hover:bg-gray-50"
+                            onClick={() => {
+                              setActiveScriptId(null)
+                              setScriptName('Untitled')
+                              setWorkbenchScript(DEFAULT_EXAMPLE_SCRIPT)
+                            }}
+                            title="New script"
+                          >
+                            New
+                          </button>
+                          <button
+                            className="text-xs px-2 py-1 border rounded bg-white hover:bg-gray-50"
+                            onClick={() => {
+                              const name = scriptName.trim() || 'Untitled'
+                              if (activeScriptId) {
+                                setSavedScripts((prev) => prev.map((s) => (s.id === activeScriptId ? { ...s, name, code: workbenchScript, updatedAt: new Date().toISOString() } : s)))
+                              } else {
+                                const id = `script-${Date.now()}-${Math.random().toString(36).slice(2,8)}`
+                                const rec: SavedScript = { id, name, code: workbenchScript, updatedAt: new Date().toISOString() }
+                                setSavedScripts((prev) => [...prev, rec])
+                                setActiveScriptId(id)
+                              }
+                            }}
+                            title="Save script"
+                          >
+                            Save
+                          </button>
+                          <button
+                            className="text-xs px-2 py-1 border rounded bg-white hover:bg-gray-50 disabled:opacity-50"
+                            disabled={!activeScriptId}
+                            onClick={() => {
+                              if (!activeScriptId) return
+                              setSavedScripts((prev) => prev.filter((s) => s.id !== activeScriptId))
+                              setActiveScriptId(null)
+                            }}
+                            title="Delete script"
+                          >
+                            Delete
+                          </button>
                           <button
                             className="text-xs px-2 py-1 border rounded bg-white hover:bg-gray-50"
                             onClick={() => {
@@ -2734,9 +3071,18 @@ function transform(input, context) {
                             Check
                           </button>
                           <button
-                            className="text-xs px-2 py-1 border rounded bg-blue-600 text-white hover:bg-blue-700"
+                            className="text-xs px-2 py-1 border rounded bg-white hover:bg-gray-50"
                             onClick={() => {
-                              const input = activeTab?.content || ''
+                              const full = activeTab?.content || ''
+                              let input = full
+                              if (wbUseSelection && editorRef.current) {
+                                const editor = editorRef.current as any
+                                const model = editor.getModel()
+                                const sel = editor.getSelection()
+                                if (sel && !sel.isEmpty()) {
+                                  input = model.getValueInRange(sel)
+                                }
+                              }
                               try {
                                 // eslint-disable-next-line no-new-func
                                 const fn = new Function(
@@ -2755,14 +3101,51 @@ function transform(input, context) {
                             Run
                           </button>
                           <button
-                            className="text-xs px-2 py-1 border rounded bg-green-600 text-white hover:bg-green-700"
+                            className="text-xs px-2 py-1 border rounded bg-white hover:bg-gray-50"
                             onClick={() => {
-                              if (!activeTab?.id) return
-                              if (typeof workbenchResult !== 'string') return
-                              const newContent = workbenchResult
-                              // Reuse existing update function if available
-                              if (newContent != null) {
-                                setTabs((prev) => prev.map((t) => (t.id === activeTabId ? { ...t, content: newContent } : t)))
+                              // Compile transformer once
+                              let fn: ((input: string, context: { filename?: string }) => string) | null = null
+                              try {
+                                // eslint-disable-next-line no-new-func
+                                fn = new Function(
+                                  'input',
+                                  'context',
+                                  `${workbenchScript}; if (typeof transform !== 'function') { throw new Error('Define function transform(input, context)') } return String(transform(input, context));`,
+                                ) as any
+                              } catch (err) {
+                                return
+                              }
+                              if (!fn) return
+
+                              const applyActiveWithSelectionIfAny = (content: string): string => {
+                                if (wbUseSelection && editorRef.current) {
+                                  const editor = editorRef.current as any
+                                  const model = editor.getModel()
+                                  const sel = editor.getSelection()
+                                  if (sel && !sel.isEmpty()) {
+                                    const start = model.getOffsetAt(sel.getStartPosition())
+                                    const end = model.getOffsetAt(sel.getEndPosition())
+                                    const snippet = model.getValueInRange(sel)
+                                    const out = fn(snippet, { filename: activeTab?.name })
+                                    const before = content.slice(0, start)
+                                    const after = content.slice(end)
+                                    return before + out + after
+                                  }
+                                }
+                                return fn(content, { filename: activeTab?.name })
+                              }
+
+                              if (wbAllTabs) {
+                                setTabs((prev) => prev.map((t) => {
+                                  if (t.id === activeTabId) {
+                                    return { ...t, content: applyActiveWithSelectionIfAny(t.content) }
+                                  }
+                                  const out = fn!(t.content, { filename: t.name })
+                                  return { ...t, content: out }
+                                }))
+                              } else {
+                                if (!activeTab?.id) return
+                                setTabs((prev) => prev.map((t) => (t.id === activeTabId ? { ...t, content: applyActiveWithSelectionIfAny(t.content) } : t)))
                               }
                             }}
                             title="Replace the current editor content with the result"
@@ -2788,7 +3171,13 @@ function transform(input, context) {
                         />
                       </div>
                     </div>
-                    <div className="flex-1 min-w-0 flex flex-col">
+                    <div
+                      className={`w-2 cursor-col-resize flex-shrink-0 relative group ${wbIsDragging ? 'bg-primary/40' : ''}`}
+                      onMouseDown={handleWbMouseDown}
+                    >
+                      <div className="absolute inset-y-0 left-1 w-px bg-border group-hover:bg-primary/60 transition-colors" />
+                    </div>
+                    <div className="flex-1 min-w-0 flex flex-col" style={{ width: `${(1 - wbSplitRatio) * 100}%` }}>
                       <div className="px-3 py-2 border-b bg-white text-xs text-gray-600 flex items-center justify-between">
                         <span>Result Preview</span>
                         <div className="flex items-center gap-2">
@@ -2808,9 +3197,10 @@ function transform(input, context) {
                       </div>
                     </div>
                   </div>
-                )}
+                  )
+                }
 
-                {workbenchTool === 'regex' && (
+                {false && (
                   <div className="flex-1 min-h-0 flex">
                     <div className="w-1/2 min-w-[40%] border-r border-gray-200 flex flex-col">
                       <div className="px-3 py-2 border-b bg-white grid grid-cols-12 gap-2 items-center">
@@ -2840,16 +3230,25 @@ function transform(input, context) {
                         <div className="col-span-12 flex items-center gap-2 justify-end mt-1">
                           <button
                             className="text-xs px-2 py-1 border rounded bg-blue-600 text-white hover:bg-blue-700"
-                            onClick={() => {
-                              const input = activeTab?.content || ''
-                              try {
-                                const re = new RegExp(regexPattern, regexFlags)
-                                const out = input.replace(re, regexReplacement)
-                                setWorkbenchResult(out)
-                              } catch (err: any) {
-                                setWorkbenchResult(`/* Regex error: ${err?.message || String(err)} */\n`)
+                          onClick={() => {
+                            const full = activeTab?.content || ''
+                            let input = full
+                            if (wbUseSelection && editorRef.current) {
+                              const editor = editorRef.current as any
+                              const model = editor.getModel()
+                              const sel = editor.getSelection()
+                              if (sel && !sel.isEmpty()) {
+                                input = model.getValueInRange(sel)
                               }
-                            }}
+                            }
+                            try {
+                              const re = new RegExp(regexPattern, regexFlags)
+                              const out = input.replace(re, regexReplacement)
+                              setWorkbenchResult(out)
+                            } catch (err: any) {
+                              setWorkbenchResult(`/* Regex error: ${err?.message || String(err)} */\n`)
+                            }
+                          }}
                             title="Run regex replace on current file"
                           >
                             Run
@@ -2857,10 +3256,51 @@ function transform(input, context) {
                           <button
                             className="text-xs px-2 py-1 border rounded bg-green-600 text-white hover:bg-green-700"
                             onClick={() => {
-                              if (!activeTab?.id) return
-                              if (typeof workbenchResult !== 'string') return
-                              const newContent = workbenchResult
-                              setTabs((prev) => prev.map((t) => (t.id === activeTabId ? { ...t, content: newContent } : t)))
+                              const applyActive = (content: string): string => {
+                                if (wbUseSelection && editorRef.current) {
+                                  const editor = editorRef.current as any
+                                  const model = editor.getModel()
+                                  const sel = editor.getSelection()
+                                  if (sel && !sel.isEmpty()) {
+                                    const start = model.getOffsetAt(sel.getStartPosition())
+                                    const end = model.getOffsetAt(sel.getEndPosition())
+                                    const snippet = model.getValueInRange(sel)
+                                    try {
+                                      const re = new RegExp(regexPattern, regexFlags)
+                                      const out = snippet.replace(re, regexReplacement)
+                                      const before = content.slice(0, start)
+                                      const after = content.slice(end)
+                                      return before + out + after
+                                    } catch {
+                                      return content
+                                    }
+                                  }
+                                }
+                                try {
+                                  const re = new RegExp(regexPattern, regexFlags)
+                                  return content.replace(re, regexReplacement)
+                                } catch {
+                                  return content
+                                }
+                              }
+                              const selectionRangeForNonActive = (content: string): { start: number; end: number } | null => {
+                                return null
+                              }
+                              if (wbAllTabs) {
+                                setTabs((prev) => prev.map((t) => {
+                                  if (t.id === activeTabId) return { ...t, content: applyActive(t.content) }
+                                  if (wbUseSelection) {
+                                    const rng = selectionRangeForNonActive(t.content)
+                                    if (rng) {
+                                      try { const re = new RegExp(regexPattern, regexFlags); const snippet = t.content.slice(rng.start, rng.end); const out = snippet.replace(re, regexReplacement); return { ...t, content: t.content.slice(0, rng.start) + out + t.content.slice(rng.end) } } catch { return t }
+                                    }
+                                  }
+                                  try { const re = new RegExp(regexPattern, regexFlags); return { ...t, content: t.content.replace(re, regexReplacement) } } catch { return t }
+                                }))
+                              } else {
+                                if (!activeTab?.id) return
+                                setTabs((prev) => prev.map((t) => (t.id === activeTabId ? { ...t, content: applyActive(t.content) } : t)))
+                              }
                             }}
                             title="Replace the current editor content with the result"
                           >
@@ -2885,6 +3325,326 @@ function transform(input, context) {
                         <div className="flex items-center gap-2">
                           <span className="text-gray-400">{activeTab?.name || 'Untitled'}</span>
                         </div>
+                      </div>
+                      <div className="flex-1 min-h-0">
+                        <Editor
+                          height="100%"
+                          width="100%"
+                          language="markdown"
+                          theme={resolvedTheme === 'dark' ? 'custom-vs-dark' : 'custom-vs'}
+                          value={workbenchResult}
+                          onChange={() => undefined}
+                          options={{ readOnly: true, minimap: { enabled: false }, wordWrap: 'on', scrollBeyondLastLine: false }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {false && (
+                  <div className="flex-1 min-h-0 flex">
+                    <div className="w-1/2 min-w-[40%] border-r border-gray-200 flex flex-col">
+                      <div className="px-3 py-2 border-b bg-white flex items-center gap-2">
+                        <label className="text-xs text-gray-600">Data</label>
+                        <div className="inline-flex border rounded overflow-hidden">
+                          <button className={`text-xs px-2 py-1 ${mergeDataMode === 'csv' ? 'bg-gray-100' : 'bg-white'}`} onClick={() => setMergeDataMode('csv')}>CSV</button>
+                          <button className={`text-xs px-2 py-1 ${mergeDataMode === 'json' ? 'bg-gray-100' : 'bg-white'}`} onClick={() => setMergeDataMode('json')}>JSON</button>
+                        </div>
+                        {mergeDataMode === 'csv' && (
+                          <>
+                            <input
+                              type="file"
+                              accept=".csv,text/csv"
+                              className="text-xs"
+                              onChange={(e) => {
+                                const f = e.target.files?.[0]
+                                if (!f) return
+                                const reader = new FileReader()
+                                reader.onload = () => {
+                                  setMergeCsvText(String(reader.result || ''))
+                                }
+                                reader.readAsText(f)
+                              }}
+                            />
+                            <button
+                              className="ml-auto text-xs px-2 py-1 border rounded bg-white hover:bg-gray-50"
+                              onClick={() => {
+                                setMergeCsvText('name,email\nAlice,alice@example.com\nBob,bob@example.com')
+                              }}
+                            >
+                              Insert CSV example
+                            </button>
+                          </>
+                        )}
+                        {mergeDataMode === 'json' && (
+                          <button
+                            className="ml-auto text-xs px-2 py-1 border rounded bg-white hover:bg-gray-50"
+                            onClick={() => setMergeJsonText('[{"name":"Alice","email":"alice@example.com"},{"name":"Bob","email":"bob@example.com"}]')}
+                          >
+                            Insert JSON example
+                          </button>
+                        )}
+                      </div>
+                      <div className="flex-1 min-h-0 p-2">
+                        {mergeDataMode === 'csv' ? (
+                          <textarea
+                            className="w-full h-full text-xs border rounded p-2 font-mono"
+                            placeholder="Paste CSV here (first line headers)"
+                            value={mergeCsvText}
+                            onChange={(e) => setMergeCsvText(e.target.value)}
+                          />
+                        ) : (
+                          <textarea
+                            className="w-full h-full text-xs border rounded p-2 font-mono"
+                            placeholder='Paste JSON array of objects, e.g. [{"name":"Alice"}]'
+                            value={mergeJsonText}
+                            onChange={(e) => setMergeJsonText(e.target.value)}
+                          />
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex-1 min-w-0 flex flex-col">
+                      <div className="px-3 py-2 border-b bg-white text-xs text-gray-600 flex items-center gap-2 flex-wrap">
+                        <span>Row</span>
+                        {mergeDataMode === 'csv' ? (
+                          <select className="text-xs border rounded px-2 py-1 bg-white" value={mergeSelectedRow} onChange={(e) => setMergeSelectedRow(parseInt(e.target.value, 10) || 0)}>
+                            {(() => { const lines = mergeCsvText ? mergeCsvText.split(/\r?\n/).filter(Boolean) : []; const rowCount = Math.max(0, lines.length - 1); return Array.from({ length: rowCount }, (_, i) => i).map((i) => (<option key={i} value={i}>{i}</option>)) })()}
+                          </select>
+                        ) : (
+                          <select className="text-xs border rounded px-2 py-1 bg-white" value={mergeSelectedRow} onChange={(e) => setMergeSelectedRow(parseInt(e.target.value, 10) || 0)}>
+                            {(() => { let arr: any[] = []; try { arr = JSON.parse(mergeJsonText || '[]') } catch {}; if (!Array.isArray(arr)) arr = []; return arr.map((_, i) => (<option key={i} value={i}>{i}</option>)) })()}
+                          </select>
+                        )}
+                        <label className="ml-auto text-[11px] flex items-center gap-2">
+                          <input type="checkbox" className="accent-current" checked={mergeBatch} onChange={(e) => setMergeBatch(e.target.checked)} />
+                          <span>Batch per row</span>
+                        </label>
+                        <span>Filename</span>
+                        <Input className="text-xs h-8 w-48" placeholder="{{name}}.md" value={mergeFilenameTemplate} onChange={(e) => setMergeFilenameTemplate(e.target.value)} />
+                        <span>Folder</span>
+                        <Input className="text-xs h-8 w-48" placeholder="Clients/{{name}}" value={mergeFolderTemplate} onChange={(e) => setMergeFolderTemplate(e.target.value)} title="Outputs will be placed in this folder path (created if missing)" />
+                        <span>Preview</span>
+                        <Select value={String(mergePreviewCount)} onValueChange={(v) => setMergePreviewCount(parseInt(v, 10) || 5)}>
+                          <SelectTrigger size="sm"><SelectValue placeholder="Rows" /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="3">3</SelectItem>
+                            <SelectItem value="5">5</SelectItem>
+                            <SelectItem value="10">10</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <label className="text-[11px] flex items-center gap-1">
+                          <input type="checkbox" className="accent-current" checked={mergeCreateTabs} onChange={(e) => setMergeCreateTabs(e.target.checked)} />
+                          <span>Create tabs</span>
+                        </label>
+                        <label className="text-[11px] flex items-center gap-1">
+                          <input type="checkbox" className="accent-current" checked={mergeDownload} onChange={(e) => setMergeDownload(e.target.checked)} />
+                          <span>Download files</span>
+                        </label>
+                        <Button
+                          className="ml-auto"
+                          size="sm"
+                          onClick={() => {
+                            const baseContent = activeTab?.content || ''
+                            const tagRe = /\{\{\s*([\w.-]+)\s*\}\}/g
+                            const applyMap = (text: string, map: Record<string, string>): string => text.replace(tagRe, (_, k) => (k in map ? map[k] : _))
+                            if (mergeDataMode === 'csv') {
+                              const parseCsv = (text: string) => {
+                                const rows: string[][] = []
+                                let row: string[] = []
+                                let cell = ''
+                                let inQuotes = false
+                                for (let i = 0; i < text.length; i++) {
+                                  const ch = text[i]
+                                  if (inQuotes) {
+                                    if (ch === '"') { if (text[i + 1] === '"') { cell += '"'; i++ } else { inQuotes = false } }
+                                    else { cell += ch }
+                                  } else {
+                                    if (ch === '"') inQuotes = true
+                                    else if (ch === ',') { row.push(cell); cell = '' }
+                                    else if (ch === '\n' || ch === '\r') { if (ch === '\r' && text[i + 1] === '\n') i++; row.push(cell); rows.push(row); row = []; cell = '' }
+                                    else { cell += ch }
+                                  }
+                                }
+                                if (cell.length > 0 || row.length > 0) { row.push(cell); rows.push(row) }
+                                return rows
+                              }
+                              const rows = parseCsv(mergeCsvText || '')
+                              if (rows.length < 2) { setWorkbenchResult(baseContent); return }
+                              const headers = rows[0]
+                              const idx = Math.min(Math.max(0, mergeSelectedRow), rows.length - 2)
+                              const values = rows[idx + 1]
+                              const map: Record<string, string> = {}
+                              headers.forEach((h, i) => { map[h.trim()] = (values[i] ?? '').trim() })
+                              const snippet = (() => {
+                                if (wbUseSelection && editorRef.current) {
+                                  const editor = editorRef.current as any
+                                  const model = editor.getModel()
+                                  const sel = editor.getSelection()
+                                  if (sel && !sel.isEmpty()) return model.getValueInRange(sel)
+                                }
+                                return baseContent
+                              })()
+                              const replaced = applyMap(snippet, map)
+                              setWorkbenchResult(replaced)
+                            } else {
+                              let arr: any[] = []
+                              try { arr = JSON.parse(mergeJsonText || '[]') } catch {}
+                              if (!Array.isArray(arr) || arr.length === 0) { setWorkbenchResult(baseContent); return }
+                              const idx = Math.min(Math.max(0, mergeSelectedRow), arr.length - 1)
+                              const map = arr[idx] && typeof arr[idx] === 'object' ? arr[idx] : {}
+                              const snippet = (() => {
+                                if (wbUseSelection && editorRef.current) {
+                                  const editor = editorRef.current as any
+                                  const model = editor.getModel()
+                                  const sel = editor.getSelection()
+                                  if (sel && !sel.isEmpty()) return model.getValueInRange(sel)
+                                }
+                                return baseContent
+                              })()
+                              const replaced = applyMap(snippet, map as Record<string, string>)
+                              setWorkbenchResult(replaced)
+                            }
+                          }}
+                        >
+                          Run
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="default"
+                          onClick={() => {
+                            const baseActiveContent = activeTab?.content || ''
+                            const tagRe = /\{\{\s*([\w.-]+)\s*\}\}/g
+                            const applyMap = (text: string, map: Record<string, string>): string => text.replace(tagRe, (_, k) => (k in map ? map[k] : _))
+                            const buildMaps = (): Record<string, string>[] => {
+                              if (mergeDataMode === 'csv') {
+                                const parseCsv = (text: string) => {
+                                  const rows: string[][] = []
+                                  let row: string[] = []
+                                  let cell = ''
+                                  let inQuotes = false
+                                  for (let i = 0; i < text.length; i++) {
+                                    const ch = text[i]
+                                    if (inQuotes) { if (ch === '"') { if (text[i + 1] === '"') { cell += '"'; i++ } else { inQuotes = false } } else { cell += ch } }
+                                    else { if (ch === '"') inQuotes = true; else if (ch === ',') { row.push(cell); cell = '' } else if (ch === '\n' || ch === '\r') { if (ch === '\r' && text[i + 1] === '\n') i++; row.push(cell); rows.push(row); row = []; cell = '' } else { cell += ch } }
+                                  }
+                                  if (cell.length > 0 || row.length > 0) { row.push(cell); rows.push(row) }
+                                  return rows
+                                }
+                                const rows = parseCsv(mergeCsvText || '')
+                                if (rows.length < 2) return []
+                                const headers = rows[0]
+                                return rows.slice(1).map((values) => { const map: Record<string, string> = {}; headers.forEach((h, i) => { map[h.trim()] = (values[i] ?? '').trim() }); return map })
+                              } else {
+                                let arr: any[] = []
+                                try { arr = JSON.parse(mergeJsonText || '[]') } catch {}
+                                if (!Array.isArray(arr) || arr.length === 0) return []
+                                return arr.map((obj) => (obj && typeof obj === 'object' ? obj : {}))
+                              }
+                            }
+                            const buildFilename = (map: Record<string, string>) => mergeFilenameTemplate.replace(/\{\{\s*([\w.-]+)\s*\}\}/g, (_, k) => (k in map ? map[k] : _))
+                            const selectionRangeForNonActive = (content: string): { start: number; end: number } | null => null
+                            const maps = mergeBatch ? buildMaps() : (() => { const single = buildMaps(); const idx = mergeSelectedRow; return single.length ? [single[Math.min(Math.max(0, idx), single.length - 1)]] : [] })()
+                            if (!maps.length) return
+                            if (mergeBatch) {
+                              const sourceText = (() => { if (wbUseSelection && editorRef.current) { const editor = editorRef.current as any; const model = editor.getModel(); const sel = editor.getSelection(); if (sel && !sel.isEmpty()) return model.getValueInRange(sel) } return baseActiveContent })()
+                              const outputs = maps.map((map) => ({ name: buildFilename(map), content: applyMap(sourceText, map), data: map }))
+                              if (mergeCreateTabs) {
+                                setTabs((prev) => { const next = [...prev]; for (const out of outputs) { const id = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`; const folderPath = (mergeFolderTemplate || 'Default').replace(/\{\{\s*([\w.-]+)\s*\}\}/g, (_: any, k: string) => (k in (out.data as any) ? (out.data as any)[k] : _)); next.push({ id, name: out.name, content: out.content, folderPath }); addFileToFolder(id, out.name, folderPath) } return next })
+                              }
+                              if (mergeDownload) {
+                                for (const out of outputs) { try { const blob = new Blob([out.content], { type: 'text/markdown;charset=utf-8' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = out.name || 'output.md'; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url) } catch {} }
+                              }
+                              return
+                            }
+                            const applyToContent = (content: string, isActive: boolean): string => {
+                              if (wbUseSelection) {
+                                if (isActive && editorRef.current) {
+                                  const editor = editorRef.current as any; const model = editor.getModel(); const sel = editor.getSelection(); if (sel && !sel.isEmpty()) { const start = model.getOffsetAt(sel.getStartPosition()); const end = model.getOffsetAt(sel.getEndPosition()); const snippet = model.getValueInRange(sel); const rep = applyMap(snippet, maps[0]); return content.slice(0, start) + rep + content.slice(end) }
+                                } else {
+                                  const rng = selectionRangeForNonActive(content); if (rng) { const snippet = content.slice(rng.start, rng.end); const rep = applyMap(snippet, maps[0]); return content.slice(0, rng.start) + rep + content.slice(rng.end) }
+                                }
+                              }
+                              return applyMap(content, maps[0])
+                            }
+                            if (wbAllTabs) { setTabs((prev) => prev.map((t) => ({ ...t, content: applyToContent(t.content, t.id === activeTabId) }))) } else { setTabs((prev) => prev.map((t) => (t.id === activeTabId ? { ...t, content: applyToContent(t.content, true) } : t))) }
+                          }}
+                        >
+                          Apply
+                        </Button>
+                      </div>
+                      {/* Batch Preview Table */}
+                      <div className="px-3 py-2 border-b bg-white text-xs text-gray-600">
+                        <div className="font-medium mb-2">Preview</div>
+                        {(() => {
+                          const computeMaps = () => {
+                            if (mergeDataMode === 'csv') {
+                              const parseCsv = (text: string) => {
+                                const rows: string[][] = []
+                                let row: string[] = []
+                                let cell = ''
+                                let inQuotes = false
+                                for (let i = 0; i < text.length; i++) {
+                                  const ch = text[i]
+                                  if (inQuotes) { if (ch === '"') { if (text[i + 1] === '"') { cell += '"'; i++ } else { inQuotes = false } } else { cell += ch } }
+                                  else { if (ch === '"') inQuotes = true; else if (ch === ',') { row.push(cell); cell = '' } else if (ch === '\n' || ch === '\r') { if (ch === '\r' && text[i + 1] === '\n') i++; row.push(cell); rows.push(row); row = []; cell = '' } else { cell += ch } }
+                                }
+                                if (cell.length > 0 || row.length > 0) { row.push(cell); rows.push(row) }
+                                return rows
+                              }
+                              const rows = parseCsv(mergeCsvText || '')
+                              if (rows.length < 2) return [] as Record<string, string>[]
+                              const headers = rows[0]
+                              return rows.slice(1).map((values) => { const map: Record<string, string> = {}; headers.forEach((h, i) => { map[h.trim()] = (values[i] ?? '').trim() }); return map })
+                            } else {
+                              let arr: any[] = []
+                              try { arr = JSON.parse(mergeJsonText || '[]') } catch {}
+                              if (!Array.isArray(arr) || arr.length === 0) return [] as Record<string, string>[]
+                              return arr.map((obj) => (obj && typeof obj === 'object' ? obj : {}))
+                            }
+                          }
+                          const maps = computeMaps()
+                          if (maps.length === 0) return <div className="text-gray-500">No data</div>
+                          const sourceText = (() => {
+                            if (wbUseSelection && editorRef.current) {
+                              const editor = editorRef.current as any
+                              const model = editor.getModel()
+                              const sel = editor.getSelection()
+                              if (sel && !sel.isEmpty()) return model.getValueInRange(sel)
+                            }
+                            return activeTab?.content || ''
+                          })()
+                          const tagRe = /\{\{\s*([\w.-]+)\s*\}\}/g
+                          const applyMap = (text: string, map: Record<string, string>): string => text.replace(tagRe, (_, k) => (k in map ? map[k] : _))
+                          const items = maps.slice(0, Math.max(1, mergePreviewCount))
+                          return (
+                            <div className="border rounded">
+                              <Table>
+                                <TableHeader>
+                                  <TableRow>
+                                    <TableHead className="w-14">Row</TableHead>
+                                    <TableHead>Filename</TableHead>
+                                    <TableHead>Snippet</TableHead>
+                                  </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                  {items.map((m, i) => {
+                                    const name = (mergeFilenameTemplate || '{{name}}.md').replace(tagRe, (_, k) => (k in m ? m[k] : _))
+                                    const out = applyMap(sourceText, m)
+                                    const snippet = out.slice(0, 120).replace(/\n/g, ' ')
+                                    const rowIndex = i
+                                    return (
+                                      <TableRow key={i} className="cursor-pointer hover:bg-muted/40" onClick={() => { setMergeSelectedRow(rowIndex); setWorkbenchResult(out) }}>
+                                        <TableCell>{rowIndex}</TableCell>
+                                        <TableCell className="font-mono text-xs">{name}</TableCell>
+                                        <TableCell className="text-xs text-muted-foreground">{snippet}{out.length > 120 ? '…' : ''}</TableCell>
+                                      </TableRow>
+                                    )
+                                  })}
+                                </TableBody>
+                              </Table>
+                            </div>
+                          )
+                        })()}
                       </div>
                       <div className="flex-1 min-h-0">
                         <Editor
