@@ -170,18 +170,47 @@ function PreviewTemplates({
 }
 
 export default function ZenNotes() {
+  type UIState = {
+    showFileExplorer?: boolean
+    pinnedExplorer?: boolean
+    showCopilot?: boolean
+    splitView?: boolean
+    showMarkdownPreview?: boolean
+    splitRatio?: number
+    settingsTab?: 'appearance' | 'editor' | 'preview' | 'ai' | 'shortcuts'
+  }
+  // Read initial UI state from localStorage synchronously on first render
+  const getInitialUIState = () => {
+    try {
+      const raw = localStorage.getItem("zenNotes.uiState.v1")
+      if (!raw) return {}
+      const parsed = JSON.parse(raw)
+      return parsed && typeof parsed === "object" ? parsed : {}
+    } catch {
+      return {}
+    }
+  }
+  const initialUI = getInitialUIState() as Partial<UIState>
   const [tabs, setTabs] = useState<Tab[]>([])
   const [activeTabId, setActiveTabId] = useState<string>("")
   const [isLoaded, setIsLoaded] = useState(false)
   const [editingTabId, setEditingTabId] = useState<string | null>(null)
   const [editingName, setEditingName] = useState("")
-  const [showMarkdownPreview, setShowMarkdownPreview] = useState(false)
-  const [splitView, setSplitView] = useState(false)
-  const [splitRatio, setSplitRatio] = useState(0.5) // 50/50 split by default
+  const [showMarkdownPreview, setShowMarkdownPreview] = useState(
+    () => (typeof initialUI.showMarkdownPreview === "boolean" ? initialUI.showMarkdownPreview : false),
+  )
+  const [splitView, setSplitView] = useState(
+    () => (typeof initialUI.splitView === "boolean" ? initialUI.splitView : false),
+  )
+  const [splitRatio, setSplitRatio] = useState(() => (typeof initialUI.splitRatio === "number" ? initialUI.splitRatio : 0.5)) // 50/50 split by default
   const [isDragging, setIsDragging] = useState(false)
   const [showStartMenu, setShowStartMenu] = useState(false)
   const [showEditorSettings, setShowEditorSettings] = useState(false)
-  const [showFileExplorer, setShowFileExplorer] = useState(false)
+  const [showFileExplorer, setShowFileExplorer] = useState(() => {
+    const base = typeof initialUI.showFileExplorer === "boolean" ? initialUI.showFileExplorer : false
+    // Ensure explorer is visible when pinned
+    return initialUI.pinnedExplorer ? true : base
+  })
   const [folderStructure, setFolderStructure] = useState<FolderItem[]>([])
   const [favorites, setFavorites] = useState<string[]>([])
   const [editingFolderId, setEditingFolderId] = useState<string | null>(null)
@@ -213,14 +242,18 @@ export default function ZenNotes() {
   const [tooltipPosition, setTooltipPosition] = useState({ x: 0, y: 0 })
   const hoverTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
-  const [pinnedExplorer, setPinnedExplorer] = useState(false)
+  const [pinnedExplorer, setPinnedExplorer] = useState(
+    () => (typeof initialUI.pinnedExplorer === "boolean" ? initialUI.pinnedExplorer : false),
+  )
 
   const [previewSettings, setPreviewSettings] = useState<PreviewSettings>({
     style: "classic",
     customCss: "",
     templates: [],
   })
-  const [settingsTab, setSettingsTab] = useState<'appearance' | 'editor' | 'preview' | 'ai' | 'shortcuts'>('editor')
+  const [settingsTab, setSettingsTab] = useState<'appearance' | 'editor' | 'preview' | 'ai' | 'shortcuts'>(
+    () => (typeof initialUI.settingsTab === "string" ? initialUI.settingsTab : 'editor'),
+  )
 
   const fontOptions = [
     { name: "JetBrains Mono", value: "JetBrains Mono" },
@@ -239,7 +272,9 @@ export default function ZenNotes() {
 
   const [selectedText, setSelectedText] = useState("")
   const [showCopilotButton, setShowCopilotButton] = useState(false)
-  const [showCopilot, setShowCopilot] = useState(false)
+  const [showCopilot, setShowCopilot] = useState(
+    () => (typeof initialUI.showCopilot === "boolean" ? initialUI.showCopilot : false),
+  )
   const [copilotInput, setCopilotInput] = useState("")
   const [buttonPosition, setButtonPosition] = useState({ x: 0, y: 0 })
   const [copilotMessages, setCopilotMessages] = useState<
@@ -647,25 +682,7 @@ export default function ZenNotes() {
     } catch {}
   }, [])
 
-  // Load UI state (explorer/copilot/split etc.) on first mount
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(UI_STATE_KEY)
-      if (raw) {
-        const parsed = JSON.parse(raw)
-        if (typeof parsed.showFileExplorer === "boolean") setShowFileExplorer(parsed.showFileExplorer)
-        if (typeof parsed.pinnedExplorer === "boolean") setPinnedExplorer(parsed.pinnedExplorer)
-        if (typeof parsed.showCopilot === "boolean") setShowCopilot(parsed.showCopilot)
-        if (typeof parsed.splitView === "boolean") setSplitView(parsed.splitView)
-        if (typeof parsed.showMarkdownPreview === "boolean") setShowMarkdownPreview(parsed.showMarkdownPreview)
-        if (typeof parsed.splitRatio === "number") setSplitRatio(parsed.splitRatio)
-        if (typeof parsed.settingsTab === "string") setSettingsTab(parsed.settingsTab)
-
-        // Ensure explorer is visible when pinned
-        if (parsed?.pinnedExplorer) setShowFileExplorer(true)
-      }
-    } catch {}
-  }, [])
+  // UI state is initialized lazily from localStorage above; no extra load effect needed
 
   // Persist settings to localStorage whenever they change
   useEffect(() => {
@@ -790,7 +807,7 @@ export default function ZenNotes() {
       document.removeEventListener("mousedown", handleClickOutside)
       document.removeEventListener("touchstart", handleClickOutside)
     }
-  }, [])
+  }, [pinnedExplorer])
 
   useEffect(() => {
     const originalError = console.error
