@@ -29,6 +29,7 @@ import {
   Send,
   Pin,
   FileText,
+  Wrench,
 } from "lucide-react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
@@ -174,6 +175,12 @@ export default function ZenNotes() {
     showFileExplorer?: boolean
     pinnedExplorer?: boolean
     showCopilot?: boolean
+    showWorkbench?: boolean
+    workbenchTool?: 'script' | 'regex'
+    workbenchScript?: string
+    regexPattern?: string
+    regexFlags?: string
+    regexReplacement?: string
     splitView?: boolean
     showMarkdownPreview?: boolean
     splitRatio?: number
@@ -275,6 +282,58 @@ export default function ZenNotes() {
   const [showCopilot, setShowCopilot] = useState(
     () => (typeof initialUI.showCopilot === "boolean" ? initialUI.showCopilot : false),
   )
+  // Workbench state
+  const [showWorkbench, setShowWorkbench] = useState(
+    () => (typeof initialUI.showWorkbench === "boolean" ? initialUI.showWorkbench : false),
+  )
+  const [workbenchTool, setWorkbenchTool] = useState<'script' | 'regex'>(
+    () => ((initialUI.workbenchTool === 'regex' || initialUI.workbenchTool === 'script') ? initialUI.workbenchTool : 'script') as 'script' | 'regex',
+  )
+  const DEFAULT_EXAMPLE_SCRIPT = `// Define a transform function that receives the current file content
+// and returns the transformed content as a string.
+// You can also use the provided context: { filename }
+
+function transform(input, context) {
+  // Example: Convert to Title Case per line
+  const toTitle = (s) => s.replace(/(^|\s|[-_])([a-z])/g, (m, p1, p2) => (p1 || '') + p2.toUpperCase())
+  return input.split('\n').map(toTitle).join('\n')
+}
+`
+  const exampleScripts: Array<{ id: string; name: string; code: string; description: string }> = [
+    {
+      id: 'title-case',
+      name: 'Title Case Lines',
+      description: 'Convert each line to Title Case',
+      code: DEFAULT_EXAMPLE_SCRIPT,
+    },
+    {
+      id: 'uppercase',
+      name: 'Uppercase',
+      description: 'Transform content to UPPERCASE',
+      code: `function transform(input) {\n  return input.toUpperCase()\n}`,
+    },
+    {
+      id: 'trim-trailing',
+      name: 'Trim Trailing Spaces',
+      description: 'Removes trailing spaces from each line',
+      code: `function transform(input) {\n  return input.split('\\n').map(l => l.replace(/\\s+$/,'')).join('\\n')\n}`,
+    },
+    {
+      id: 'wrap-80',
+      name: 'Wrap at 80 cols',
+      description: 'Naively wrap lines at 80 characters',
+      code: `function transform(input) {\n  const wrap = (s, n=80) => s.match(new RegExp('.{1,'+n+'}', 'g')).join('\\n')\n  return input.split('\\n').map(l => l.length>80 ? wrap(l) : l).join('\\n')\n}`,
+    },
+  ]
+  const [workbenchScript, setWorkbenchScript] = useState<string>(
+    () => (typeof initialUI.workbenchScript === 'string' && initialUI.workbenchScript.trim().length > 0
+      ? (initialUI.workbenchScript as string)
+      : DEFAULT_EXAMPLE_SCRIPT),
+  )
+  const [regexPattern, setRegexPattern] = useState<string>(() => (typeof initialUI.regexPattern === 'string' ? initialUI.regexPattern as string : ''))
+  const [regexFlags, setRegexFlags] = useState<string>(() => (typeof initialUI.regexFlags === 'string' ? (initialUI.regexFlags as string) : 'g'))
+  const [regexReplacement, setRegexReplacement] = useState<string>(() => (typeof initialUI.regexReplacement === 'string' ? initialUI.regexReplacement as string : ''))
+  const [workbenchResult, setWorkbenchResult] = useState<string>("")
   const [copilotInput, setCopilotInput] = useState("")
   const [buttonPosition, setButtonPosition] = useState({ x: 0, y: 0 })
   const [copilotMessages, setCopilotMessages] = useState<
@@ -703,6 +762,12 @@ export default function ZenNotes() {
         showFileExplorer,
         pinnedExplorer,
         showCopilot,
+        showWorkbench,
+        workbenchTool,
+        workbenchScript,
+        regexPattern,
+        regexFlags,
+        regexReplacement,
         splitView,
         showMarkdownPreview,
         splitRatio,
@@ -710,7 +775,7 @@ export default function ZenNotes() {
       }
       localStorage.setItem(UI_STATE_KEY, JSON.stringify(ui))
     } catch {}
-  }, [showFileExplorer, pinnedExplorer, showCopilot, splitView, showMarkdownPreview, splitRatio, settingsTab])
+  }, [showFileExplorer, pinnedExplorer, showCopilot, showWorkbench, workbenchTool, workbenchScript, regexPattern, regexFlags, regexReplacement, splitView, showMarkdownPreview, splitRatio, settingsTab])
 
   const handleKeyDown = (e: KeyboardEvent) => {
     // Unified shortcuts: require Ctrl + Command + key (no Shift)
@@ -750,6 +815,21 @@ export default function ZenNotes() {
       setSplitView((prev) => !prev)
       setShowMarkdownPreview(false) // Close preview overlay if open
       setShowCopilot(false)
+      setShowWorkbench(false)
+    }
+
+    // Workbench: Ctrl+Cmd+W
+    if (withCtrlCmd && (e.key === "w" || e.key === "W")) {
+      e.preventDefault()
+      setShowWorkbench((prev) => {
+        const next = !prev
+        if (next) {
+          setShowMarkdownPreview(false)
+          setSplitView(false)
+          setShowCopilot(false)
+        }
+        return next
+      })
     }
 
     // Escape: Close any preview mode
@@ -760,6 +840,7 @@ export default function ZenNotes() {
       setShowEditorSettings(false)
       setShowFileExplorer(false)
       setShowCopilot(false)
+      setShowWorkbench(false)
       setShowAtReference(false) // Close @ reference dropdown
       setShowChatAtReference(false) // Close chat @ reference dropdown
     }
@@ -2300,6 +2381,20 @@ export default function ZenNotes() {
         <div className="ml-auto flex items-center gap-2">
           <button
             onClick={() => {
+              setShowWorkbench(!showWorkbench)
+              if (!showWorkbench) {
+                setSplitView(false)
+                setShowMarkdownPreview(false)
+                setShowCopilot(false)
+              }
+            }}
+            className={`p-2 hover:bg-muted/40 rounded ${showWorkbench ? "bg-muted" : ""}`}
+            title="Toggle Workbench (⌃⌘W)"
+          >
+            <Wrench size={16} />
+          </button>
+          <button
+            onClick={() => {
               setShowCopilot(!showCopilot)
               if (!showCopilot) {
                 setSplitView(false)
@@ -2316,6 +2411,7 @@ export default function ZenNotes() {
               setShowMarkdownPreview(!showMarkdownPreview)
               setSplitView(false)
               setShowCopilot(false)
+              setShowWorkbench(false)
             }}
             className={`p-2 hover:bg-muted/40 rounded ${showMarkdownPreview ? "bg-muted" : ""}`}
             title="Toggle Preview (⌃⌘P)"
@@ -2327,6 +2423,7 @@ export default function ZenNotes() {
               setSplitView(!splitView)
               setShowMarkdownPreview(false)
               setShowCopilot(false)
+              setShowWorkbench(false)
             }}
             className={`p-2 hover:bg-muted/40 rounded ${splitView ? "bg-muted" : ""}`}
             title="Toggle Split View (⌃⌘S)"
@@ -2344,12 +2441,12 @@ export default function ZenNotes() {
         <div
           ref={splitContainerRef}
           className={`${
-            splitView || showCopilot ? "max-w-full" : editorSettings.fullWidth ? "max-w-full" : "max-w-[80%]"
-          } w-full h-full relative flex min-h-0 ${splitView || showCopilot ? "gap-0" : "flex-col"}`}
+            splitView || showCopilot || showWorkbench ? "max-w-full" : editorSettings.fullWidth ? "max-w-full" : "max-w-[80%]"
+          } w-full h-full relative flex min-h-0 ${splitView || showCopilot || showWorkbench ? "gap-0" : "flex-col"}`}
         >
           <div
-            className={`${splitView || showCopilot ? "" : "w-full"} h-full relative flex flex-col min-h-0`}
-            style={splitView || showCopilot ? { width: `${splitRatio * 100}%` } : {}}
+            className={`${splitView || showCopilot || showWorkbench ? "" : "w-full"} h-full relative flex flex-col min-h-0`}
+            style={splitView || showCopilot || showWorkbench ? { width: `${splitRatio * 100}%` } : {}}
           >
             <div className="flex-1 pt-4">
               <Editor
@@ -2545,6 +2642,264 @@ export default function ZenNotes() {
                     <span>Press Enter to send, Shift+Enter for new line. Type @ to reference files.</span>
                   </div>
                 </div>
+              </div>
+            </>
+          )}
+
+          {showWorkbench && (
+            <>
+              <div
+                className={`w-2 cursor-col-resize flex-shrink-0 relative group ${
+                  isDragging ? "bg-primary" : ""
+                }`}
+                onMouseDown={handleMouseDown}
+              >
+                <div
+                  className="absolute inset-y-0 left-1 w-px bg-border group-hover:bg-primary/60 transition-colors"
+                  onMouseDown={handleMouseDown}
+                />
+              </div>
+
+              <div
+                className="h-full bg-gray-50 border-l border-gray-200 flex-shrink-0 flex flex-col min-h-0"
+                style={{ width: `${(1 - splitRatio) * 100}%` }}
+              >
+                <div className="flex items-center justify-between px-4 py-2 border-b border-gray-200 bg-gray-100/50">
+                  <div className="flex items-center gap-3">
+                    <Wrench size={16} className="text-gray-700" />
+                    <h3 className="font-semibold text-sm text-gray-800">Workbench</h3>
+                    <div className="ml-2 flex items-center gap-2">
+                      <button
+                        className={`text-xs px-2 py-1 rounded border ${workbenchTool === 'script' ? 'bg-white' : 'bg-gray-100'}`}
+                        onClick={() => setWorkbenchTool('script')}
+                        title="Use a JavaScript transform"
+                      >
+                        Script Transform
+                      </button>
+                      <button
+                        className={`text-xs px-2 py-1 rounded border ${workbenchTool === 'regex' ? 'bg-white' : 'bg-gray-100'}`}
+                        onClick={() => setWorkbenchTool('regex')}
+                        title="Find/replace using RegExp"
+                      >
+                        Regex Replace
+                      </button>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setShowWorkbench(false)}
+                    className="p-1 hover:bg-gray-200/60 rounded text-gray-500 hover:text-gray-700 transition-colors"
+                    title="Close Workbench (Escape)"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+
+                {/* Workbench Body */}
+                {workbenchTool === 'script' && (
+                  <div className="flex-1 min-h-0 flex">
+                    <div className="w-1/2 min-w-[40%] border-r border-gray-200 flex flex-col">
+                      <div className="px-3 py-2 border-b bg-white flex items-center gap-2">
+                        <label className="text-xs text-gray-600">Example</label>
+                        <select
+                          className="text-xs border rounded px-2 py-1 bg-white"
+                          onChange={(e) => {
+                            const found = exampleScripts.find((s) => s.id === e.target.value)
+                            if (found) setWorkbenchScript(found.code)
+                          }}
+                          defaultValue=""
+                        >
+                          <option value="" disabled>
+                            Choose example…
+                          </option>
+                          {exampleScripts.map((ex) => (
+                            <option key={ex.id} value={ex.id}>
+                              {ex.name}
+                            </option>
+                          ))}
+                        </select>
+                        <div className="ml-auto flex items-center gap-2">
+                          <button
+                            className="text-xs px-2 py-1 border rounded bg-white hover:bg-gray-50"
+                            onClick={() => {
+                              try {
+                                const code = `${workbenchScript}\n; if (typeof transform !== 'function') { throw new Error('Define function transform(input, context)') }` // lint
+                                // test compile only
+                                // eslint-disable-next-line no-new-func
+                                new Function('input','context', `${workbenchScript}; return true;`) // compile test
+                              } catch {}
+                              // no-op compile test
+                            }}
+                            title="Quick-check script compiles"
+                          >
+                            Check
+                          </button>
+                          <button
+                            className="text-xs px-2 py-1 border rounded bg-blue-600 text-white hover:bg-blue-700"
+                            onClick={() => {
+                              const input = activeTab?.content || ''
+                              try {
+                                // eslint-disable-next-line no-new-func
+                                const fn = new Function(
+                                  'input',
+                                  'context',
+                                  `${workbenchScript}; if (typeof transform !== 'function') { throw new Error('Define function transform(input, context)') } return String(transform(input, context));`,
+                                ) as (input: string, context: { filename?: string }) => string
+                                const output = fn(input, { filename: activeTab?.name })
+                                setWorkbenchResult(output)
+                              } catch (err: any) {
+                                setWorkbenchResult(`/* Transform error: ${err?.message || String(err)} */\n`)
+                              }
+                            }}
+                            title="Run transform on current file"
+                          >
+                            Run
+                          </button>
+                          <button
+                            className="text-xs px-2 py-1 border rounded bg-green-600 text-white hover:bg-green-700"
+                            onClick={() => {
+                              if (!activeTab?.id) return
+                              if (typeof workbenchResult !== 'string') return
+                              const newContent = workbenchResult
+                              // Reuse existing update function if available
+                              if (newContent != null) {
+                                setTabs((prev) => prev.map((t) => (t.id === activeTabId ? { ...t, content: newContent } : t)))
+                              }
+                            }}
+                            title="Replace the current editor content with the result"
+                          >
+                            Apply
+                          </button>
+                        </div>
+                      </div>
+                      <div className="flex-1 min-h-0">
+                        <Editor
+                          height="100%"
+                          width="100%"
+                          language="javascript"
+                          theme={resolvedTheme === 'dark' ? 'custom-vs-dark' : 'custom-vs'}
+                          value={workbenchScript}
+                          onChange={(v) => setWorkbenchScript(v || '')}
+                          options={{
+                            minimap: { enabled: false },
+                            fontSize: 13,
+                            wordWrap: 'on',
+                            scrollBeyondLastLine: false,
+                          }}
+                        />
+                      </div>
+                    </div>
+                    <div className="flex-1 min-w-0 flex flex-col">
+                      <div className="px-3 py-2 border-b bg-white text-xs text-gray-600 flex items-center justify-between">
+                        <span>Result Preview</span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-gray-400">{activeTab?.name || 'Untitled'}</span>
+                        </div>
+                      </div>
+                      <div className="flex-1 min-h-0">
+                        <Editor
+                          height="100%"
+                          width="100%"
+                          language="markdown"
+                          theme={resolvedTheme === 'dark' ? 'custom-vs-dark' : 'custom-vs'}
+                          value={workbenchResult}
+                          onChange={() => undefined}
+                          options={{ readOnly: true, minimap: { enabled: false }, wordWrap: 'on', scrollBeyondLastLine: false }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {workbenchTool === 'regex' && (
+                  <div className="flex-1 min-h-0 flex">
+                    <div className="w-1/2 min-w-[40%] border-r border-gray-200 flex flex-col">
+                      <div className="px-3 py-2 border-b bg-white grid grid-cols-12 gap-2 items-center">
+                        <label className="text-[11px] text-gray-600 col-span-2">Pattern</label>
+                        <input
+                          className="col-span-6 text-xs border rounded px-2 py-1"
+                          placeholder="e.g. \\bTODO:(.*)"
+                          value={regexPattern}
+                          onChange={(e) => setRegexPattern(e.target.value)}
+                        />
+                        <label className="text-[11px] text-gray-600 col-span-1 text-right">Flags</label>
+                        <input
+                          className="col-span-3 text-xs border rounded px-2 py-1"
+                          placeholder="gim"
+                          value={regexFlags}
+                          onChange={(e) => setRegexFlags(e.target.value)}
+                        />
+
+                        <label className="text-[11px] text-gray-600 col-span-2">Replace</label>
+                        <input
+                          className="col-span-10 text-xs border rounded px-2 py-1"
+                          placeholder="e.g. NOTE:$1"
+                          value={regexReplacement}
+                          onChange={(e) => setRegexReplacement(e.target.value)}
+                        />
+
+                        <div className="col-span-12 flex items-center gap-2 justify-end mt-1">
+                          <button
+                            className="text-xs px-2 py-1 border rounded bg-blue-600 text-white hover:bg-blue-700"
+                            onClick={() => {
+                              const input = activeTab?.content || ''
+                              try {
+                                const re = new RegExp(regexPattern, regexFlags)
+                                const out = input.replace(re, regexReplacement)
+                                setWorkbenchResult(out)
+                              } catch (err: any) {
+                                setWorkbenchResult(`/* Regex error: ${err?.message || String(err)} */\n`)
+                              }
+                            }}
+                            title="Run regex replace on current file"
+                          >
+                            Run
+                          </button>
+                          <button
+                            className="text-xs px-2 py-1 border rounded bg-green-600 text-white hover:bg-green-700"
+                            onClick={() => {
+                              if (!activeTab?.id) return
+                              if (typeof workbenchResult !== 'string') return
+                              const newContent = workbenchResult
+                              setTabs((prev) => prev.map((t) => (t.id === activeTabId ? { ...t, content: newContent } : t)))
+                            }}
+                            title="Replace the current editor content with the result"
+                          >
+                            Apply
+                          </button>
+                        </div>
+                      </div>
+                      <div className="p-3 text-[11px] text-gray-500 bg-gray-50 border-b">
+                        Use JavaScript-style RegExp. Replacement supports capture groups like $1.
+                      </div>
+                      <div className="flex-1 min-h-0 overflow-auto p-3 text-xs text-gray-600">
+                        <div>
+                          <div>Examples:</div>
+                          <div className="mt-1">Pattern: <code className="bg-gray-100 px-1 rounded">^# (.*)$</code> Flags: <code className="bg-gray-100 px-1 rounded">gm</code> Replace: <code className="bg-gray-100 px-1 rounded">## $1</code></div>
+                          <div>Pattern: <code className="bg-gray-100 px-1 rounded">\\s+$</code> Flags: <code className="bg-gray-100 px-1 rounded">gm</code> Replace: <code className="bg-gray-100 px-1 rounded"></code></div>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex-1 min-w-0 flex flex-col">
+                      <div className="px-3 py-2 border-b bg-white text-xs text-gray-600 flex items-center justify-between">
+                        <span>Result Preview</span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-gray-400">{activeTab?.name || 'Untitled'}</span>
+                        </div>
+                      </div>
+                      <div className="flex-1 min-h-0">
+                        <Editor
+                          height="100%"
+                          width="100%"
+                          language="markdown"
+                          theme={resolvedTheme === 'dark' ? 'custom-vs-dark' : 'custom-vs'}
+                          value={workbenchResult}
+                          onChange={() => undefined}
+                          options={{ readOnly: true, minimap: { enabled: false }, wordWrap: 'on', scrollBeyondLastLine: false }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             </>
           )}
