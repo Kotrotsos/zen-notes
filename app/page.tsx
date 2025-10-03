@@ -34,6 +34,7 @@ import {
   Rows,
   Grid3X3,
   Zap,
+  Sparkles,
 } from "lucide-react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
@@ -499,6 +500,9 @@ function transform(input, context) {
   const [copilotUsage, setCopilotUsage] = useState<{ input: number; output: number; total: number; contextPct: number } | null>(
     null,
   )
+  const [showApiKey, setShowApiKey] = useState(false)
+  const [testStatus, setTestStatus] = useState<string | null>(null)
+  const [workbenchSelectedPromptId, setWorkbenchSelectedPromptId] = useState<string>("")
   const [copilotSettings, setCopilotSettings] = useState<CopilotSettings>({
     systemPrompt:
       "You are Zen Notes Copilot with tools. Always respond in GitHub-Flavored Markdown with clear headings, lists, and code fences. You can use tools: (1) web_search — use for current events, missing facts, or to verify claims; cite sources with full URLs. (2) fetch_url — when the user provides an HTTPS URL or asks to fetch a specific page or API, retrieve a concise text snapshot and then summarize with citations. If a tool isn\'t needed, answer directly. Be concise and factual; if unsure, say so and propose next steps.",
@@ -900,6 +904,23 @@ function transform(input, context) {
       localStorage.setItem(SETTINGS_KEY, JSON.stringify(payload))
     } catch {}
   }, [editorSettings, previewSettings, copilotSettings, modelsSettings])
+
+  // Ensure a Prompts folder exists for saving .prompt files
+  useEffect(() => {
+    if (!isLoaded) return
+    setFolderStructure((prev) => {
+      const exists = prev.some((item) => item.type === 'folder' && item.name === 'Prompts')
+      if (exists) return prev
+      const promptsFolder: FolderItem = {
+        id: `folder-prompts-${Date.now()}`,
+        name: 'Prompts',
+        type: 'folder',
+        children: [],
+        isExpanded: true,
+      }
+      return [...prev, promptsFolder]
+    })
+  }, [isLoaded])
 
   // Persist UI state to localStorage whenever it changes
   useEffect(() => {
@@ -2436,7 +2457,11 @@ function transform(input, context) {
             draggable
             onDragStart={(e) => handleDragStart(e, item)}
           >
-            <File size={12} className="text-muted-foreground" />
+            {item.name?.toLowerCase().endsWith('.prompt') ? (
+              <Sparkles size={12} className="text-purple-500" />
+            ) : (
+              <File size={12} className="text-muted-foreground" />
+            )}
             <span className="text-xs flex-1">{item.name}</span>
             <button
               onClick={(e) => {
@@ -2526,7 +2551,11 @@ function transform(input, context) {
                       }`}
                       onClick={() => setActiveTabId(tabId)}
                     >
-                      <File size={12} className="text-muted-foreground" />
+                      {tab.name?.toLowerCase().endsWith('.prompt') ? (
+                        <Sparkles size={12} className="text-purple-500" />
+                      ) : (
+                        <File size={12} className="text-muted-foreground" />
+                      )}
                       <span className="text-xs">{tab.name}</span>
                     </div>
                   )
@@ -3915,6 +3944,28 @@ function transform(input, context) {
                       ))
                     }
                   }}
+                  availablePrompts={tabs
+                    .filter((t) => t.name?.toLowerCase().endsWith('.prompt'))
+                    .map((t) => ({ id: t.id, name: t.name, content: t.content, folderPath: t.folderPath }))}
+                  onSavePrompt={(name, content, folderPath = 'Prompts') => {
+                    setTabs((prev) => {
+                      // If a prompt with the same name exists, overwrite its content
+                      const existingIndex = prev.findIndex((t) => t.name === name)
+                      if (existingIndex !== -1) {
+                        const next = [...prev]
+                        next[existingIndex] = { ...next[existingIndex], content, folderPath }
+                        return next
+                      }
+                      const id = `tab-${Date.now()}-${Math.random().toString(36).slice(2,8)}`
+                      const view: 'text' | 'table' = 'text'
+                      const next = [...prev, { id, name, content, folderPath, view }]
+                      // update folder structure
+                      addFileToFolder(id, name, folderPath)
+                      setActiveTabId(id)
+                      return next
+                    })
+                  }}
+                  selectedPromptId={workbenchSelectedPromptId}
                 />
               </div>
             </>
@@ -4418,13 +4469,70 @@ function transform(input, context) {
             <div>
               <h3 className="font-semibold text-sm mb-2">Models</h3>
               <label className="block text-xs font-medium mb-1">OpenAI API Key</label>
-              <input
-                type="password"
-                value={modelsSettings.openaiApiKey || ''}
-                onChange={(e) => setModelsSettings((ms) => ({ ...ms, openaiApiKey: e.target.value }))}
-                placeholder="sk-..."
-                className="w-full px-2 py-1 text-xs border border-border rounded bg-background font-mono"
-              />
+              <div className="flex items-center gap-2">
+                <input
+                  type={showApiKey ? 'text' : 'password'}
+                  value={modelsSettings.openaiApiKey || ''}
+                  onChange={(e) => setModelsSettings((ms) => ({ ...ms, openaiApiKey: e.target.value }))}
+                  placeholder="sk-..."
+                  className="w-full px-2 py-1 text-xs border border-border rounded bg-background font-mono"
+                />
+                <button
+                  className="px-2 py-1 text-xs border rounded"
+                  onClick={() => setShowApiKey((v) => !v)}
+                  title={showApiKey ? 'Hide' : 'Show'}
+                >
+                  {showApiKey ? 'Hide' : 'Show'}
+                </button>
+              </div>
+              <div className="mt-2 flex items-center gap-2">
+                <button
+                  className="px-2 py-1 text-xs border rounded"
+                  onClick={async () => {
+                    setTestStatus('testing')
+                    try {
+                      const res = await fetch('/api/test-openai', {
+                        headers: modelsSettings.openaiApiKey ? { 'x-openai-key': modelsSettings.openaiApiKey } : undefined,
+                      })
+                      const data = await res.json().catch(() => ({}))
+                      if (res.ok && data.ok) setTestStatus('ok')
+                      else setTestStatus(data?.error || 'failed')
+                    } catch (e: any) {
+                      setTestStatus(e?.message || 'failed')
+                    }
+                  }}
+                >
+                  Test Connection
+                </button>
+                <button
+                  className="px-2 py-1 text-xs border rounded"
+                  onClick={async () => {
+                    setTestStatus('testing')
+                    try {
+                      const res = await fetch('/api/test-openai-response', {
+                        method: 'POST',
+                        headers: {
+                          'Content-Type': 'application/json',
+                          ...(modelsSettings.openaiApiKey ? { 'x-openai-key': modelsSettings.openaiApiKey } : {}),
+                        },
+                        body: JSON.stringify({ model: copilotModel }),
+                      })
+                      const data = await res.json().catch(() => ({}))
+                      if (res.ok && data.ok) setTestStatus('ok')
+                      else setTestStatus(data?.error || 'failed')
+                    } catch (e: any) {
+                      setTestStatus(e?.message || 'failed')
+                    }
+                  }}
+                >
+                  Responses Test
+                </button>
+                {testStatus === 'testing' && <span className="text-xs text-muted-foreground">Testing...</span>}
+                {testStatus === 'ok' && <span className="text-xs text-green-600">OK</span>}
+                {testStatus && testStatus !== 'ok' && testStatus !== 'testing' && (
+                  <span className="text-xs text-destructive">{String(testStatus)}</span>
+                )}
+              </div>
               <p className="text-[11px] text-muted-foreground mt-1">Stored locally in your browser (never sent to our servers).</p>
             </div>
             )}
@@ -4693,7 +4801,13 @@ function transform(input, context) {
                 }`}
                 onClick={() => handleChatAtReferenceSelect(item)}
               >
-                {item.type === "file" && <FileText size={14} className="text-blue-500" />}
+                {item.type === "file" && (
+                  (item.name?.toLowerCase().endsWith('.prompt') || item.path?.toLowerCase().endsWith('.prompt')) ? (
+                    <Sparkles size={14} className="text-purple-500" />
+                  ) : (
+                    <FileText size={14} className="text-blue-500" />
+                  )
+                )}
                 {item.type === "folder" && <Folder size={14} className="text-yellow-500" />}
                 {item.type === "special" && <MessageSquare size={14} className="text-green-500" />}
                 <div className="flex-1">

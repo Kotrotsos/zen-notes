@@ -16,6 +16,9 @@ interface AIWorkbenchProps {
   onClose: () => void
   onCreateNewTab?: (content: string, name: string) => void
   onAppendToTab?: (content: string) => void
+  availablePrompts?: Array<{ id: string; name: string; content: string; folderPath?: string }>
+  onSavePrompt?: (name: string, content: string, folderPath?: string) => void
+  selectedPromptId?: string
 }
 
 type SeparatorType = "newline" | "blank-line" | "word" | "characters" | "custom"
@@ -28,13 +31,18 @@ interface ChunkResult {
   error?: string
 }
 
-export default function AIWorkbench({ activeTabContent, activeTabName, onClose, onCreateNewTab, onAppendToTab }: AIWorkbenchProps) {
+export default function AIWorkbench({ activeTabContent, activeTabName, onClose, onCreateNewTab, onAppendToTab, availablePrompts = [], onSavePrompt, selectedPromptId }: AIWorkbenchProps) {
   // Settings
   const [model, setModel] = useState("gpt-4.1")
   const [prompt, setPrompt] = useState("Summarize the following text:")
   const [temperature, setTemperature] = useState(0.7)
   const [maxTokens, setMaxTokens] = useState(500)
   const [showAdvanced, setShowAdvanced] = useState(false)
+  const [selectedPromptIdState, setSelectedPromptIdState] = useState<string>("")
+  const [saveOpen, setSaveOpen] = useState(false)
+  const [saveName, setSaveName] = useState("")
+  const [saveFolder, setSaveFolder] = useState("Prompts")
+  const [overwrite, setOverwrite] = useState(false)
 
   // Chunking
   const [separatorType, setSeparatorType] = useState<SeparatorType>("newline")
@@ -125,6 +133,66 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
 
     return parts.filter(p => p.trim().length > 0)
   }
+
+  // Frontmatter helpers for .prompt files
+  const parseFrontmatter = (text: string): { meta: Record<string, string>, body: string } => {
+    const fmMatch = text.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/)
+    if (!fmMatch) return { meta: {}, body: text }
+    const metaLines = fmMatch[1].split(/\r?\n/)
+    const meta: Record<string, string> = {}
+    for (const line of metaLines) {
+      const m = line.match(/^([a-zA-Z0-9_\-]+)\s*:\s*(.*)$/)
+      if (m) meta[m[1]] = m[2]
+    }
+    return { meta, body: fmMatch[2] }
+  }
+
+  const buildPromptFile = (name: string, promptBody: string): string => {
+    const fm = [
+      '---',
+      'type: prompt',
+      `model: ${model}`,
+      `temperature: ${temperature}`,
+      `max_tokens: ${maxTokens}`,
+      '---',
+      promptBody.trimStart(),
+      '',
+    ].join('\n')
+    return fm
+  }
+
+  const handleSelectPrompt = (id: string) => {
+    setSelectedPromptIdState(id)
+    const item = availablePrompts.find((p) => p.id === id)
+    if (!item) return
+    const { meta, body } = parseFrontmatter(item.content || '')
+    if (meta.model) setModel(meta.model)
+    if (meta.temperature && !Number.isNaN(Number(meta.temperature))) setTemperature(Number(meta.temperature))
+    if (meta.max_tokens && !Number.isNaN(Number(meta.max_tokens))) setMaxTokens(Number(meta.max_tokens))
+    setPrompt(body || '')
+  }
+
+  const handleSavePrompt = async () => {
+    if (!onSavePrompt) return
+    const rawName = saveName.trim() || (activeTabName || 'Untitled')
+    const fileName = rawName.toLowerCase().endsWith('.prompt') ? rawName : `${rawName}.prompt`
+    const exists = availablePrompts.some((p) => p.name === fileName)
+    if (exists && !overwrite) return // prevent accidental overwrite; user must check overwrite
+    const content = buildPromptFile(fileName, prompt)
+    onSavePrompt(fileName, content, saveFolder || 'Prompts')
+    setSaveOpen(false)
+    setSaveName("")
+    setOverwrite(false)
+    setSelectedPromptIdState("")
+  }
+
+  // React to external selectedPromptId
+  useEffect(() => {
+    if (selectedPromptId) {
+      handleSelectPrompt(selectedPromptId)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedPromptId])
 
   // Process a single chunk
   const processChunk = async (chunk: string, index: number) => {
@@ -390,6 +458,64 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
 
       {/* Settings Panel */}
       <div className="flex-shrink-0 p-4 border-b space-y-4 max-h-[50vh] overflow-y-auto">
+        {/* Prompt Selection + Save */}
+        <div className="space-y-2">
+          <Label className="text-xs">Prompt Template</Label>
+          <div className="flex items-center gap-2">
+            <select
+              className="h-8 text-xs border border-border rounded bg-background px-2 flex-1"
+              value={selectedPromptIdState}
+              onChange={(e) => handleSelectPrompt(e.target.value)}
+            >
+              <option value="">— Select a saved prompt —</option>
+              {availablePrompts.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+            <Button variant="secondary" size="sm" onClick={() => setSaveOpen(true)}>Save Prompt</Button>
+          </div>
+        </div>
+
+        {/* Save Prompt Dialog */}
+        {saveOpen && (
+          <div className="border border-border rounded p-3 space-y-2 bg-muted/30">
+            <div className="flex items-center justify-between">
+              <div className="text-xs font-semibold">Save Prompt</div>
+              <button className="text-xs" onClick={() => setSaveOpen(false)}>Close</button>
+            </div>
+            <div className="space-y-2">
+              <div>
+                <Label className="text-xs">Name</Label>
+                <Input
+                  className="h-8 text-xs"
+                  placeholder="My prompt.prompt"
+                  value={saveName}
+                  onChange={(e) => setSaveName(e.target.value)}
+                />
+              </div>
+              <div>
+                <Label className="text-xs">Folder</Label>
+                <Input
+                  className="h-8 text-xs"
+                  placeholder="Prompts"
+                  value={saveFolder}
+                  onChange={(e) => setSaveFolder(e.target.value)}
+                />
+              </div>
+              {availablePrompts.some((p) => (saveName?.toLowerCase().endsWith('.prompt') ? p.name === saveName : p.name === `${saveName}.prompt`)) && (
+                <label className="flex items-center gap-2 text-xs text-destructive">
+                  <input type="checkbox" checked={overwrite} onChange={(e) => setOverwrite(e.target.checked)} />
+                  A prompt with this name exists. Overwrite?
+                </label>
+              )}
+              <div className="flex items-center gap-2">
+                <Button size="sm" onClick={handleSavePrompt} disabled={!saveName.trim() || (availablePrompts.some((p) => (saveName?.toLowerCase().endsWith('.prompt') ? p.name === saveName : p.name === `${saveName}.prompt`)) && !overwrite)}>Save</Button>
+                <Button size="sm" variant="ghost" onClick={() => setSaveOpen(false)}>Cancel</Button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Model Selection */}
         <div className="space-y-2">
           <Label className="text-xs">Model</Label>
