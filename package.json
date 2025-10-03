@@ -4,10 +4,10 @@
   "private": true,
   "scripts": {
     "build": "next build",
+    "postbuild": "mkdir -p .next/standalone/.next && cp -R .next/static .next/standalone/.next/static && if [ -d public ]; then cp -R public .next/standalone/public; fi",
     "dev": "next dev",
     "lint": "next lint",
-    "start": "node .next/standalone/server.js",
-    "azure:start": "npm ci --production=false && npm run build && node .next/standalone/server.js",
+    "start": "cd .next/standalone && node server.js",
     "test": "npm run test:unit",
     "test:unit": "jest",
     "test:unit:watch": "jest --watch",
@@ -15,6 +15,10 @@
     "test:e2e:ui": "playwright test --ui",
     "test:ci": "npm run test:unit && npm run test:e2e",
     "pw:install": "playwright install --with-deps"
+  },
+  "engines": {
+    "node": ">=18 <23",
+    "npm": ">=9"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
