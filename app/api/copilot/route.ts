@@ -7,6 +7,13 @@ type HistoryMessage = {
 
 export async function POST(req: Request) {
   try {
+    const apiKey = req.headers.get('x-openai-key') || process.env.OPENAI_API_KEY
+    if (!apiKey) {
+      return new Response(
+        `event: error\ndata: ${JSON.stringify({ error: 'Missing OpenAI API key' })}\n\n`,
+        { status: 401, headers: { 'Content-Type': 'text/event-stream' } }
+      )
+    }
     const {
       messages,
       model,
@@ -39,7 +46,7 @@ export async function POST(req: Request) {
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'text/event-stream',
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
         model: model || 'gpt-4.1',
@@ -116,7 +123,7 @@ export async function POST(req: Request) {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+            Authorization: `Bearer ${apiKey}`,
           },
           body: JSON.stringify({ tool_outputs: outputs }),
         })

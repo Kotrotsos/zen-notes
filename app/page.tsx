@@ -124,6 +124,10 @@ interface CopilotSettings {
   userAgent?: string
 }
 
+interface ModelsSettings {
+  openaiApiKey?: string
+}
+
 function PreviewTemplates({
   previewSettings,
   setPreviewSettings,
@@ -208,7 +212,7 @@ export default function ZenNotes() {
     splitView?: boolean
     showMarkdownPreview?: boolean
     splitRatio?: number
-    settingsTab?: 'appearance' | 'editor' | 'preview' | 'ai' | 'shortcuts'
+    settingsTab?: 'appearance' | 'editor' | 'preview' | 'models' | 'ai' | 'shortcuts'
   }
   // Read initial UI state from localStorage synchronously on first render
   const getInitialUIState = () => {
@@ -326,7 +330,7 @@ export default function ZenNotes() {
     customCss: "",
     templates: [],
   })
-  const [settingsTab, setSettingsTab] = useState<'appearance' | 'editor' | 'preview' | 'ai' | 'shortcuts'>(
+  const [settingsTab, setSettingsTab] = useState<'appearance' | 'editor' | 'preview' | 'models' | 'ai' | 'shortcuts'>(
     () => (typeof initialUI.settingsTab === "string" ? initialUI.settingsTab : 'editor'),
   )
 
@@ -507,6 +511,7 @@ function transform(input, context) {
   })
   const SETTINGS_KEY = "zenNotes.settings.v1"
   const UI_STATE_KEY = "zenNotes.uiState.v1"
+  const [modelsSettings, setModelsSettings] = useState<ModelsSettings>({ openaiApiKey: '' })
 
   const [showAtReference, setShowAtReference] = useState(false)
   const [atReferencePosition, setAtReferencePosition] = useState({ x: 0, y: 0 })
@@ -876,6 +881,7 @@ function transform(input, context) {
           setCopilotSettings((prev) => ({ ...prev, ...parsed.copilotSettings }))
           if (parsed.copilotSettings.defaultModel) setCopilotModel(parsed.copilotSettings.defaultModel)
         }
+        if (parsed.modelsSettings) setModelsSettings((prev) => ({ ...prev, ...parsed.modelsSettings }))
       }
     } catch {}
   }, [])
@@ -889,10 +895,11 @@ function transform(input, context) {
         editorSettings,
         previewSettings,
         copilotSettings,
+        modelsSettings,
       }
       localStorage.setItem(SETTINGS_KEY, JSON.stringify(payload))
     } catch {}
-  }, [editorSettings, previewSettings, copilotSettings])
+  }, [editorSettings, previewSettings, copilotSettings, modelsSettings])
 
   // Persist UI state to localStorage whenever it changes
   useEffect(() => {
@@ -2132,7 +2139,10 @@ function transform(input, context) {
 
       const res = await fetch("/api/copilot", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(modelsSettings.openaiApiKey ? { "x-openai-key": modelsSettings.openaiApiKey } : {}),
+        },
         body: JSON.stringify({
           messages: history,
           model: copilotModel,
@@ -4404,6 +4414,21 @@ function transform(input, context) {
 
             <div className="border-t border-border my-2"></div>
 
+            {settingsTab === 'models' && (
+            <div>
+              <h3 className="font-semibold text-sm mb-2">Models</h3>
+              <label className="block text-xs font-medium mb-1">OpenAI API Key</label>
+              <input
+                type="password"
+                value={modelsSettings.openaiApiKey || ''}
+                onChange={(e) => setModelsSettings((ms) => ({ ...ms, openaiApiKey: e.target.value }))}
+                placeholder="sk-..."
+                className="w-full px-2 py-1 text-xs border border-border rounded bg-background font-mono"
+              />
+              <p className="text-[11px] text-muted-foreground mt-1">Stored locally in your browser (never sent to our servers).</p>
+            </div>
+            )}
+
             {settingsTab === 'ai' && (
             <div>
               <h3 className="font-semibold text-sm mb-2">Copilot Settings</h3>
@@ -4694,6 +4719,7 @@ function SettingsTabs() {
         ['appearance', 'Appearance'],
         ['editor', 'Editor'],
         ['preview', 'Preview'],
+        ['models', 'Models'],
         ['ai', 'AI'],
         ['shortcuts', 'Shortcuts'],
       ] as const).map(([key, label]) => (

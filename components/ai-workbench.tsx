@@ -152,9 +152,22 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
         temperature
       })
 
+      // Load API key from localStorage settings
+      let apiKey: string | undefined
+      try {
+        const raw = localStorage.getItem("zenNotes.settings.v1")
+        if (raw) {
+          const parsed = JSON.parse(raw)
+          apiKey = parsed?.modelsSettings?.openaiApiKey || parsed?.openaiApiKey
+        }
+      } catch {}
+
       const response = await fetch("/api/ai-workbench", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(apiKey ? { "x-openai-key": apiKey } : {}),
+        },
         body: JSON.stringify({
           prompt: actualPrompt,
           chunk: actualChunk,

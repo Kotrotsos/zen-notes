@@ -56,12 +56,20 @@ export async function POST(req: Request) {
 
     console.log('Sending to OpenAI:', JSON.stringify(requestBody).substring(0, 200))
 
+    const apiKey = req.headers.get('x-openai-key') || process.env.OPENAI_API_KEY
+    if (!apiKey) {
+      return new Response(
+        `event: error\ndata: ${JSON.stringify({ error: 'Missing OpenAI API key' })}\n\n`,
+        { status: 401, headers: { 'Content-Type': 'text/event-stream' } }
+      )
+    }
+
     const upstream = await fetch('https://api.openai.com/v1/responses', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Accept: 'text/event-stream',
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify(requestBody),
     })
