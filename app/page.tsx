@@ -42,6 +42,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import TableView from "@/components/table-view"
 import AIWorkbench from "@/components/ai-workbench"
 import { parseCsv, stringifyCsv, isValidCsv } from "@/lib/csv"
@@ -62,6 +63,7 @@ interface Tab {
   content: string
   folderPath?: string
   view?: 'text' | 'table'
+  isOpen?: boolean
 }
 
 interface EditorSettings {
@@ -98,6 +100,10 @@ interface AppData {
   favorites?: string[] // Tab IDs
   previewSettings?: PreviewSettings
   copilotSettings?: CopilotSettings
+}
+
+interface AppPrefs {
+  skipDeleteConfirm?: boolean
 }
 
 type PreviewStyle = "classic" | "clean" | "serif" | "compact"
@@ -249,6 +255,7 @@ export default function ZenNotes() {
   })
   const [folderStructure, setFolderStructure] = useState<FolderItem[]>([])
   const [favorites, setFavorites] = useState<string[]>([])
+  const [appPrefs, setAppPrefs] = useState<AppPrefs>({ skipDeleteConfirm: false })
   const [editingFolderId, setEditingFolderId] = useState<string | null>(null)
   const [editingFolderName, setEditingFolderName] = useState("")
   const [editorSettings, setEditorSettings] = useState<EditorSettings>({
@@ -761,6 +768,7 @@ function transform(input, context) {
     await store.put({ id: "main", ...data })
   }
 
+
   const loadFromIndexedDB = async (): Promise<AppData | null> => {
     if (!dbRef.current) return null
 
@@ -783,48 +791,37 @@ function transform(input, context) {
   }
 
   useEffect(() => {
+    const applyAppData = (savedData: AppData) => {
+      setTabs(savedData.tabs)
+      setActiveTabId(savedData.activeTabId)
+      if (savedData.editorSettings) setEditorSettings(savedData.editorSettings)
+      if (savedData.folderStructure) {
+        setFolderStructure(savedData.folderStructure)
+      } else {
+        const defaultFolder = createDefaultFolder()
+        savedData.tabs.forEach((tab) => {
+          defaultFolder.children.push({ id: `file-${tab.id}`, name: tab.name, type: 'file', tabId: tab.id })
+        })
+        setFolderStructure([defaultFolder])
+      }
+      if (savedData.favorites) setFavorites(savedData.favorites)
+      if (savedData.previewSettings) setPreviewSettings(savedData.previewSettings)
+      if ((savedData as any).copilotSettings) {
+        setCopilotSettings((savedData as any).copilotSettings)
+        setCopilotModel((savedData as any).copilotSettings.defaultModel || 'gpt-4.1')
+      }
+      if ((savedData as any).settings && (savedData as any).settings.copilotModel) {
+        setCopilotModel((savedData as any).settings.copilotModel)
+      }
+    }
+
     const initApp = async () => {
       try {
         dbRef.current = await initDB()
         const savedData = await loadFromIndexedDB()
 
         if (savedData && savedData.tabs.length > 0) {
-          setTabs(savedData.tabs)
-          setActiveTabId(savedData.activeTabId)
-          if (savedData.editorSettings) {
-            setEditorSettings(savedData.editorSettings)
-          }
-          if (savedData.folderStructure) {
-            setFolderStructure(savedData.folderStructure)
-          } else {
-            // Create default folder structure
-            const defaultFolder = createDefaultFolder()
-            savedData.tabs.forEach((tab) => {
-              defaultFolder.children.push({
-                id: `file-${tab.id}`,
-                name: tab.name,
-                type: "file",
-                tabId: tab.id,
-              })
-            })
-            setFolderStructure([defaultFolder])
-          }
-          if (savedData.favorites) {
-            setFavorites(savedData.favorites)
-          }
-          if (savedData.previewSettings) {
-            setPreviewSettings(savedData.previewSettings)
-          }
-          if ((savedData as any).settings && (savedData as any).settings.copilotModel) {
-            setCopilotModel((savedData as any).settings.copilotModel)
-          }
-          if ((savedData as any).copilotSettings) {
-            setCopilotSettings((savedData as any).copilotSettings)
-            setCopilotModel((savedData as any).copilotSettings.defaultModel || "gpt-4.1")
-          }
-          if ((savedData as any).settings && (savedData as any).settings.copilotModel) {
-            setCopilotModel((savedData as any).settings.copilotModel)
-          }
+          applyAppData(savedData)
         } else {
           // Create default tab and folder structure
           const defaultTab: Tab = {
@@ -832,6 +829,7 @@ function transform(input, context) {
             name: "Untitled",
             content: "# New document",
             folderPath: "Default",
+            isOpen: true,
           }
           setTabs([defaultTab])
           setActiveTabId(defaultTab.id)
@@ -853,6 +851,7 @@ function transform(input, context) {
           name: "Untitled",
           content: "# New document",
           folderPath: "Default",
+          isOpen: true,
         }
         setTabs([defaultTab])
         setActiveTabId(defaultTab.id)
@@ -886,6 +885,7 @@ function transform(input, context) {
           if (parsed.copilotSettings.defaultModel) setCopilotModel(parsed.copilotSettings.defaultModel)
         }
         if (parsed.modelsSettings) setModelsSettings((prev) => ({ ...prev, ...parsed.modelsSettings }))
+        if (parsed.appPrefs) setAppPrefs((prev) => ({ ...prev, ...parsed.appPrefs }))
       }
     } catch {}
   }, [])
@@ -900,10 +900,11 @@ function transform(input, context) {
         previewSettings,
         copilotSettings,
         modelsSettings,
+        appPrefs,
       }
       localStorage.setItem(SETTINGS_KEY, JSON.stringify(payload))
     } catch {}
-  }, [editorSettings, previewSettings, copilotSettings, modelsSettings])
+  }, [editorSettings, previewSettings, copilotSettings, modelsSettings, appPrefs])
 
   // Ensure a Prompts folder exists for saving .prompt files
   useEffect(() => {
@@ -1227,18 +1228,35 @@ function transform(input, context) {
       name: "Untitled",
       content: "# New document",
       folderPath: "Default",
+      isOpen: true,
     }
     setTabs((prev) => [...prev, newTab])
     setActiveTabId(newTab.id)
   }
 
   const closeTab = (tabId: string) => {
-    if (tabs.length === 1) return // Don't close the last tab
+    const openTabs = tabs.filter((t) => t.isOpen !== false)
+    if (openTabs.length === 1) return // Don't close the last open tab
+
+    const newTabs = tabs.map((t) => (t.id === tabId ? { ...t, isOpen: false } : t))
+    setTabs(newTabs)
+
+    if (activeTabId === tabId) {
+      // pick nearest previous open tab
+      const index = openTabs.findIndex((t) => t.id === tabId)
+      const fallback = openTabs[index > 0 ? index - 1 : 1] || newTabs.find((t) => t.isOpen !== false) || newTabs[0]
+      if (fallback) setActiveTabId(fallback.id)
+    }
+  }
+
+  // Permanently delete a file (tab + explorer entry)
+  const deleteFile = (tabId: string) => {
+    if (tabs.length === 1) return // Don't delete the last file
 
     const newTabs = tabs.filter((tab) => tab.id !== tabId)
     setTabs(newTabs)
 
-    // Remove file from folder structure
+    // Remove from explorer structure
     setFolderStructure((prev) => {
       const removeFile = (items: (FileItem | FolderItem)[]): (FileItem | FolderItem)[] => {
         return items.filter((item) => {
@@ -1254,11 +1272,33 @@ function transform(input, context) {
       return removeFile(prev) as FolderItem[]
     })
 
+    // Remove from favorites, if present
+    setFavorites((prev) => prev.filter((id) => id !== tabId))
+
     if (activeTabId === tabId) {
       const tabIndex = tabs.findIndex((tab) => tab.id === tabId)
       const newActiveIndex = tabIndex > 0 ? tabIndex - 1 : 0
       setActiveTabId(newTabs[newActiveIndex].id)
     }
+  }
+
+  // Delete confirmation modal state
+  const [deleteModal, setDeleteModal] = useState<{ open: boolean; type?: 'file' | 'folder'; tabId?: string; folderId?: string; name?: string }>({ open: false })
+
+  const requestDeleteFile = (tabId: string, name?: string) => {
+    if (appPrefs.skipDeleteConfirm) {
+      deleteFile(tabId)
+      return
+    }
+    setDeleteModal({ open: true, type: 'file', tabId, name })
+  }
+
+  const requestDeleteFolder = (folderId: string, name?: string) => {
+    if (appPrefs.skipDeleteConfirm) {
+      deleteFolder(folderId)
+      return
+    }
+    setDeleteModal({ open: true, type: 'folder', folderId, name })
   }
 
   const updateTabContent = (content: string) => {
@@ -1276,6 +1316,8 @@ function transform(input, context) {
         editorSettings,
         folderStructure,
         favorites,
+        previewSettings,
+        copilotSettings,
       }
       autoSave(appData)
     }
@@ -1321,6 +1363,8 @@ function transform(input, context) {
           editorSettings,
           folderStructure,
           favorites,
+          previewSettings,
+          copilotSettings,
         }
         autoSave(appData)
       }
@@ -2419,7 +2463,7 @@ function transform(input, context) {
               </button>
               {item.name !== "Default" && (
                 <button
-                  onClick={() => deleteFolder(item.id)}
+                  onClick={() => requestDeleteFolder(item.id, item.name)}
                   className="p-1 hover:bg-muted rounded text-red-500"
                   title="Delete"
                 >
@@ -2439,12 +2483,16 @@ function transform(input, context) {
               if ((e as any).metaKey || (e as any).ctrlKey || (e as any).button === 1) {
                 if (!existing) return
                 const id = `tab-${Date.now()}-${Math.random().toString(36).slice(2,8)}`
-                const dup: Tab = { id, name: existing.name, content: existing.content, folderPath: existing.folderPath, view: existing.view }
+                const dup: Tab = { id, name: existing.name, content: existing.content, folderPath: existing.folderPath, view: existing.view, isOpen: true }
                 setTabs((prev) => [...prev, dup])
                 setActiveTabId(id)
                 addFileToFolder(id, dup.name, dup.folderPath || 'Default')
               } else {
-                if (existing) setActiveTabId(item.tabId)
+                if (existing) {
+                  // Ensure it's open
+                  setTabs((prev) => prev.map((t) => (t.id === item.tabId ? { ...t, isOpen: true } : t)))
+                  setActiveTabId(item.tabId)
+                }
               }
             }}
             onDoubleClick={(e) => {
@@ -2475,6 +2523,16 @@ function transform(input, context) {
             >
               <Star size={10} fill={favorites.includes(item.tabId) ? "currentColor" : "none"} />
             </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                requestDeleteFile(item.tabId, item.name)
+              }}
+              className="p-1 hover:bg-muted rounded opacity-0 group-hover:opacity-100 text-red-500"
+              title="Delete file"
+            >
+              <Trash2 size={10} />
+            </button>
           </div>
         )}
         {item.type === "folder" && item.isExpanded && <div>{renderFolderTree(item.children, level + 1)}</div>}
@@ -2492,6 +2550,46 @@ function transform(input, context) {
 
   return (
     <div className="h-screen flex flex-col bg-background text-foreground">
+      {/* Delete Confirm Modal (shadcn/ui Dialog) */}
+      <Dialog open={deleteModal.open} onOpenChange={(open) => !open && setDeleteModal({ open: false })}>
+        <DialogContent showCloseButton={false}>
+          <DialogHeader>
+            <DialogTitle>Delete {deleteModal.type === 'folder' ? 'Folder' : 'File'}</DialogTitle>
+          </DialogHeader>
+          <p className="text-xs text-muted-foreground">
+            {deleteModal.type === 'folder'
+              ? `Are you sure you want to delete "${deleteModal.name || 'this folder'}" and its contents? This action cannot be undone.`
+              : `Are you sure you want to delete "${deleteModal.name || 'this file'}"? This action cannot be undone.`}
+          </p>
+          <DialogFooter>
+            <button className="px-3 py-1.5 text-xs border rounded" onClick={() => setDeleteModal({ open: false })}>
+              Cancel
+            </button>
+            <button
+              className="px-3 py-1.5 text-xs border rounded"
+              onClick={() => {
+                setAppPrefs((p) => ({ ...p, skipDeleteConfirm: true }))
+                if (deleteModal.type === 'file' && deleteModal.tabId) deleteFile(deleteModal.tabId)
+                if (deleteModal.type === 'folder' && deleteModal.folderId) deleteFolder(deleteModal.folderId)
+                setDeleteModal({ open: false })
+              }}
+              title="Don’t ask again"
+            >
+              Always delete right away
+            </button>
+            <button
+              className="px-3 py-1.5 text-xs border rounded bg-red-600 text-white hover:bg-red-700"
+              onClick={() => {
+                if (deleteModal.type === 'file' && deleteModal.tabId) deleteFile(deleteModal.tabId)
+                if (deleteModal.type === 'folder' && deleteModal.folderId) deleteFolder(deleteModal.folderId)
+                setDeleteModal({ open: false })
+              }}
+            >
+              Yes, delete
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       {/* Explorer trigger button - only show when not pinned and not visible */}
       {!showFileExplorer && !pinnedExplorer && (
         <button
@@ -2549,7 +2647,10 @@ function transform(input, context) {
                       className={`flex items-center gap-2 py-1 px-2 hover:bg-muted/50 rounded cursor-pointer ${
                         activeTabId === tabId ? "bg-background" : ""
                       }`}
-                      onClick={() => setActiveTabId(tabId)}
+                      onClick={() => {
+                        setTabs((prev) => prev.map((t) => (t.id === tabId ? { ...t, isOpen: true } : t)))
+                        setActiveTabId(tabId)
+                      }}
                     >
                       {tab.name?.toLowerCase().endsWith('.prompt') ? (
                         <Sparkles size={12} className="text-purple-500" />
@@ -2605,7 +2706,7 @@ function transform(input, context) {
         className={`flex items-center justify-between border-b border-border bg-muted/20 transition-all duration-300 ${pinnedExplorer ? "ml-64" : "ml-0"}`}
       >
         <div className="flex items-center">
-          {tabs.map((tab) => (
+          {tabs.filter((t) => t.isOpen !== false).map((tab) => (
             <div
               key={tab.id}
               className={`flex items-center gap-2 px-3 py-2 border-r border-border cursor-pointer hover:bg-muted/40 ${
@@ -2633,7 +2734,7 @@ function transform(input, context) {
                   {tab.name}
                 </span>
               )}
-              {tabs.length > 1 && (
+              {tabs.filter((t) => t.isOpen !== false).length > 1 && (
                 <button
                   onClick={(e) => {
                     e.stopPropagation()
@@ -3931,6 +4032,7 @@ function transform(input, context) {
                       id: `tab-${Date.now()}`,
                       name,
                       content,
+                      isOpen: true,
                     }
                     setTabs((prev) => [...prev, newTab])
                     setActiveTabId(newTab.id)
@@ -3958,7 +4060,7 @@ function transform(input, context) {
                       }
                       const id = `tab-${Date.now()}-${Math.random().toString(36).slice(2,8)}`
                       const view: 'text' | 'table' = 'text'
-                      const next = [...prev, { id, name, content, folderPath, view }]
+                      const next = [...prev, { id, name, content, folderPath, view, isOpen: true }]
                       // update folder structure
                       addFileToFolder(id, name, folderPath)
                       setActiveTabId(id)
@@ -4642,7 +4744,7 @@ function transform(input, context) {
 
       {/* Status Bar */}
       <div
-        className={`sticky bottom-0 h-12 border-t border-border bg-background px-0 py-0 flex justify-between items-center text-xs font-mono text-muted-foreground transition-all duration-300 ${pinnedExplorer ? "ml-64" : "ml-0"}`}
+        className={`sticky bottom-0 h-8 border-t border-border bg-background px-0 py-0 flex justify-between items-center text-xs font-mono text-muted-foreground transition-all duration-300 ${pinnedExplorer ? "ml-64" : "ml-0"}`}
       >
         <div className="flex items-center gap-6 h-full">
           <button
@@ -4651,7 +4753,7 @@ function transform(input, context) {
               setShowStartMenu(!showStartMenu)
               setShowEditorSettings(false)
             }}
-            className={`flex items-center justify-center h-full px-4 transition-all duration-200 ${
+            className={`flex items-center justify-center w-8 h-8 transition-all duration-200 ${
               showStartMenu ? "bg-orange-700 text-white" : "bg-orange-500 hover:bg-orange-600 text-white"
             }`}
             title="Start Menu"

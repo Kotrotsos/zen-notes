@@ -21,7 +21,7 @@ interface AIWorkbenchProps {
   selectedPromptId?: string
 }
 
-type SeparatorType = "newline" | "blank-line" | "word" | "characters" | "custom"
+type SeparatorType = "none" | "newline" | "blank-line" | "word" | "characters" | "custom"
 
 interface ChunkResult {
   index: number
@@ -43,6 +43,10 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
   const [saveName, setSaveName] = useState("")
   const [saveFolder, setSaveFolder] = useState("Prompts")
   const [overwrite, setOverwrite] = useState(false)
+  // Vertical splitter (settings/results)
+  const [panelRatio, setPanelRatio] = useState(0.45) // portion for settings (0..1)
+  const [isDragging, setIsDragging] = useState(false)
+  const containerRef = useRef<HTMLDivElement | null>(null)
 
   // Chunking
   const [separatorType, setSeparatorType] = useState<SeparatorType>("newline")
@@ -101,6 +105,9 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
     let parts: string[] = []
 
     switch (separatorType) {
+      case "none":
+        parts = [content]
+        break
       case "newline":
         parts = content.split("\n")
         break
@@ -353,6 +360,31 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
     }
   }
 
+  // Splitter handlers
+  const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n))
+  const onSplitterMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault()
+    setIsDragging(true)
+  }
+  useEffect(() => {
+    if (!isDragging) return
+    const onMove = (ev: MouseEvent) => {
+      const el = containerRef.current
+      if (!el) return
+      const rect = el.getBoundingClientRect()
+      const y = ev.clientY - rect.top
+      const ratio = clamp(y / rect.height, 0.15, 0.85)
+      setPanelRatio(ratio)
+    }
+    const onUp = () => setIsDragging(false)
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+  }, [isDragging])
+
   // Process all chunks sequentially
   const handleRun = async () => {
     const chunksToProcess = createChunks(activeTabContent)
@@ -444,7 +476,7 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
   }
 
   return (
-    <div className="h-full bg-background border-l flex flex-col">
+    <div className={`h-full bg-background border-l flex flex-col ${isDragging ? 'select-none' : ''}`}>
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-2 border-b bg-muted/30">
         <div className="flex items-center gap-2">
@@ -456,8 +488,13 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
         </Button>
       </div>
 
-      {/* Settings Panel */}
-      <div className="flex-shrink-0 p-4 border-b space-y-4 max-h-[50vh] overflow-y-auto">
+      {/* Split Container: Settings (top) + Results (bottom) */}
+      <div ref={containerRef} className="flex-1 min-h-0 flex flex-col">
+        {/* Settings Panel */}
+        <div
+          className="p-4 border-b space-y-4 overflow-auto"
+          style={{ height: `calc(${(panelRatio * 100).toFixed(2)}% - 2px)` }}
+        >
         {/* Prompt Selection + Save */}
         <div className="space-y-2">
           <Label className="text-xs">Prompt Template</Label>
@@ -583,6 +620,7 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
+                <SelectItem value="none">None (Whole Document)</SelectItem>
                 <SelectItem value="newline">Newline</SelectItem>
                 <SelectItem value="blank-line">Blank Line</SelectItem>
                 <SelectItem value="word">Word Count</SelectItem>
@@ -725,16 +763,26 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
             </p>
           </div>
         )}
-      </div>
+        </div>
 
-      {/* Results Panel */}
-      <div className="flex-1 overflow-auto">
-        {results.length === 0 ? (
-          <div className="text-center text-sm text-muted-foreground py-8">
-            Configure settings and click Run to process your document
-          </div>
-        ) : (
-          <table className="w-full text-xs border-collapse">
+        {/* Divider */}
+        <div
+          onMouseDown={onSplitterMouseDown}
+          title="Drag to resize"
+          className={`relative h-2 cursor-row-resize bg-transparent group ${isDragging ? 'bg-primary/20' : ''}`}
+        >
+          <div className="absolute left-0 right-0 top-1/2 -translate-y-1/2 h-px bg-border" />
+          <div className="absolute left-1/2 -translate-x-1/2 top-1/2 -translate-y-1/2 w-16 h-2 rounded-full bg-border group-hover:bg-primary/60" />
+        </div>
+
+        {/* Results Panel */}
+        <div className="flex-1 overflow-auto">
+          {results.length === 0 ? (
+            <div className="text-center text-sm text-muted-foreground py-8">
+              Configure settings and click Run to process your document
+            </div>
+          ) : (
+            <table className="w-full text-xs border-collapse">
             <thead className="sticky top-0 bg-muted/50 border-b">
               <tr>
                 <th className="text-left p-2 font-semibold w-12">#</th>
@@ -809,6 +857,7 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
             </tbody>
           </table>
         )}
+        </div>
       </div>
     </div>
   )
