@@ -32,6 +32,8 @@ import {
   Wrench,
   Columns,
   Rows,
+  Grid3X3,
+  Zap,
 } from "lucide-react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
@@ -39,12 +41,26 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import TableView from "@/components/table-view"
+import AIWorkbench from "@/components/ai-workbench"
+import { parseCsv, stringifyCsv, isValidCsv } from "@/lib/csv"
+
+const TableGlyph = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+    <line x1="3" y1="9" x2="21" y2="9"></line>
+    <line x1="3" y1="15" x2="21" y2="15"></line>
+    <line x1="9" y1="3" x2="9" y2="21"></line>
+    <line x1="15" y1="3" x2="15" y2="21"></line>
+  </svg>
+)
 
 interface Tab {
   id: string
   name: string
   content: string
   folderPath?: string
+  view?: 'text' | 'table'
 }
 
 interface EditorSettings {
@@ -182,6 +198,7 @@ export default function ZenNotes() {
     pinnedExplorer?: boolean
     showCopilot?: boolean
     showWorkbench?: boolean
+    showAIWorkbench?: boolean
     workbenchScript?: string
     wbUseSelection?: boolean
     wbAllTabs?: boolean
@@ -250,6 +267,50 @@ export default function ZenNotes() {
 
   const [draggedItem, setDraggedItem] = useState<{ type: "file" | "folder"; id: string; tabId?: string } | null>(null)
   const [dropTarget, setDropTarget] = useState<string | null>(null)
+  const uploadInputRef = useRef<HTMLInputElement>(null)
+  const [pendingUploadPath, setPendingUploadPath] = useState<string>('Default')
+
+  const getFolderPathById = (folderId: string): string => {
+    const traverse = (items: FolderItem[], path: string[]): string | null => {
+      for (const it of items) {
+        if (it.type === 'folder') {
+          const nextPath = [...path, it.name]
+          if (it.id === folderId) return nextPath.join('/')
+          const found = traverse(it.children as FolderItem[], nextPath)
+          if (found) return found
+        }
+      }
+      return null
+    }
+    const res = traverse(folderStructure, [])
+    return res || 'Default'
+  }
+
+  const handleFilesUpload = async (fileList: FileList | null, targetPath: string) => {
+    if (!fileList || fileList.length === 0) return
+    const textLikeExt = new Set(['.md','.markdown','.mdx','.txt','.json','.csv','.yaml','.yml','.xml','.html','.css','.js','.ts','.tsx','.py','.rb','.go','.java','.c','.cpp','.rs','.toml','.ini','.sh','.zsh','.bash','.log'])
+    for (const f of Array.from(fileList)) {
+      const isText = (f.type && f.type.startsWith('text')) || Array.from(textLikeExt).some(ext => f.name.toLowerCase().endsWith(ext))
+      if (!isText) continue
+      let content = ''
+      try { content = await f.text() } catch { continue }
+      const id = `tab-${Date.now()}-${Math.random().toString(36).slice(2,8)}`
+      const name = f.name
+      const folderPath = targetPath || 'Default'
+      const view: 'text' | 'table' = name.toLowerCase().endsWith('.csv') ? 'table' : 'text'
+      setTabs((prev) => [...prev, { id, name, content, folderPath, view }])
+      setActiveTabId(id)
+      addFileToFolder(id, name, folderPath)
+    }
+  }
+
+  const triggerUpload = (targetPath: string) => {
+    setPendingUploadPath(targetPath || 'Default')
+    if (uploadInputRef.current) {
+      uploadInputRef.current.value = ''
+      uploadInputRef.current.click()
+    }
+  }
 
   const [hoveredTab, setHoveredTab] = useState<string | null>(null)
   const [showTooltip, setShowTooltip] = useState(false)
@@ -288,6 +349,9 @@ export default function ZenNotes() {
   const [showCopilotButton, setShowCopilotButton] = useState(false)
   const [showCopilot, setShowCopilot] = useState(
     () => (typeof initialUI.showCopilot === "boolean" ? initialUI.showCopilot : false),
+  )
+  const [showAIWorkbench, setShowAIWorkbench] = useState(
+    () => (typeof initialUI.showAIWorkbench === "boolean" ? initialUI.showAIWorkbench : false),
   )
   // Workbench state
   const [showWorkbench, setShowWorkbench] = useState(
@@ -625,7 +689,9 @@ function transform(input, context) {
 
   const handleDragOver = (e: React.DragEvent, folderId: string) => {
     e.preventDefault()
-    e.dataTransfer.dropEffect = "move"
+    // If dragging files, indicate copy; otherwise moving within app
+    const isFileDrag = Array.from(e.dataTransfer.types || []).includes('Files')
+    e.dataTransfer.dropEffect = isFileDrag ? 'copy' : 'move'
     setDropTarget(folderId)
   }
 
@@ -642,25 +708,17 @@ function transform(input, context) {
 
   const handleDrop = (e: React.DragEvent, targetFolder: FolderItem) => {
     e.preventDefault()
+    const files = e.dataTransfer.files
+    if (files && files.length > 0) {
+      const targetPath = getFolderPathById(targetFolder.id)
+      handleFilesUpload(files, targetPath)
+      setDropTarget(null)
+      return
+    }
+
     const tabId = e.dataTransfer.getData("text/plain")
-
     if (draggedItem && draggedItem.type === "file" && draggedItem.tabId === tabId) {
-      // Get folder path for the target folder
-      const getFolderPath = (folderId: string, items: FolderItem[], currentPath = ""): string => {
-        for (const item of items) {
-          if (item.type === "folder") {
-            const newPath = currentPath ? `${currentPath}/${item.name}` : item.name
-            if (item.id === folderId) {
-              return newPath === "Default" ? "Default" : newPath
-            }
-            const childPath = getFolderPath(folderId, item.children as FolderItem[], newPath)
-            if (childPath) return childPath
-          }
-        }
-        return ""
-      }
-
-      const targetPath = getFolderPath(targetFolder.id, folderStructure)
+      const targetPath = getFolderPathById(targetFolder.id)
       if (targetPath) {
         moveFileToFolder(tabId, targetPath)
       }
@@ -843,6 +901,7 @@ function transform(input, context) {
         showFileExplorer,
         pinnedExplorer,
         showCopilot,
+        showAIWorkbench,
         showWorkbench,
         workbenchScript,
         wbUseSelection,
@@ -857,7 +916,27 @@ function transform(input, context) {
       }
       localStorage.setItem(UI_STATE_KEY, JSON.stringify(ui))
     } catch {}
-  }, [showFileExplorer, pinnedExplorer, showCopilot, showWorkbench, workbenchScript, wbUseSelection, wbAllTabs, wbPreviewBelow, wbSplitRatio, activeScriptId, splitView, showMarkdownPreview, splitRatio, settingsTab])
+  }, [showFileExplorer, pinnedExplorer, showCopilot, showAIWorkbench, showWorkbench, workbenchScript, wbUseSelection, wbAllTabs, wbPreviewBelow, wbSplitRatio, activeScriptId, splitView, showMarkdownPreview, splitRatio, settingsTab])
+
+  // Clean up orphaned files (files in folder structure without corresponding tabs)
+  useEffect(() => {
+    setFolderStructure((prev) => {
+      const cleanupFiles = (items: (FileItem | FolderItem)[]): (FileItem | FolderItem)[] => {
+        return items.filter((item) => {
+          if (item.type === "file") {
+            // Keep file only if its tab exists
+            return tabs.some((tab) => tab.id === item.tabId)
+          }
+          if (item.type === "folder") {
+            // Recursively clean up folder children
+            item.children = cleanupFiles(item.children)
+          }
+          return true
+        })
+      }
+      return cleanupFiles(prev) as FolderItem[]
+    })
+  }, [tabs])
 
   const handleKeyDown = (e: KeyboardEvent) => {
     // Unified shortcuts: require Ctrl + Command + key (no Shift)
@@ -898,6 +977,7 @@ function transform(input, context) {
       setShowMarkdownPreview(false) // Close preview overlay if open
       setShowCopilot(false)
       setShowWorkbench(false)
+      setShowAIWorkbench(false)
     }
 
     // Workbench: Ctrl+Cmd+W
@@ -919,6 +999,7 @@ function transform(input, context) {
       setShowMarkdownPreview(false)
       setSplitView(false)
       setShowStartMenu(false)
+      setShowAIWorkbench(false)
       setShowEditorSettings(false)
       setShowFileExplorer(false)
       setShowCopilot(false)
@@ -1128,6 +1209,22 @@ function transform(input, context) {
 
     const newTabs = tabs.filter((tab) => tab.id !== tabId)
     setTabs(newTabs)
+
+    // Remove file from folder structure
+    setFolderStructure((prev) => {
+      const removeFile = (items: (FileItem | FolderItem)[]): (FileItem | FolderItem)[] => {
+        return items.filter((item) => {
+          if (item.type === "file" && item.tabId === tabId) {
+            return false
+          }
+          if (item.type === "folder") {
+            item.children = removeFile(item.children)
+          }
+          return true
+        })
+      }
+      return removeFile(prev) as FolderItem[]
+    })
 
     if (activeTabId === tabId) {
       const tabIndex = tabs.findIndex((tab) => tab.id === tabId)
@@ -2212,7 +2309,15 @@ function transform(input, context) {
   }
 
   const renderFolderTree = (items: (FileItem | FolderItem)[], level = 0) => {
-    return items.map((item) => (
+    // Filter out files whose tabs don't exist
+    const validItems = items.filter((item) => {
+      if (item.type === "file") {
+        return tabs.some((tab) => tab.id === item.tabId)
+      }
+      return true
+    })
+
+    return validItems.map((item) => (
       <div key={item.id} style={{ paddingLeft: `${level * 16}px` }}>
         {item.type === "folder" ? (
           <div
@@ -2265,6 +2370,13 @@ function transform(input, context) {
                 <FolderPlus size={10} />
               </button>
               <button
+                onClick={() => triggerUpload(getFolderPathById(item.id))}
+                className="p-1 hover:bg-muted rounded"
+                title="Upload file(s) here"
+              >
+                <Upload size={10} />
+              </button>
+              <button
                 onClick={() => {
                   setEditingFolderId(item.id)
                   setEditingFolderName(item.name)
@@ -2290,7 +2402,27 @@ function transform(input, context) {
             className={`flex items-center gap-2 py-1 px-2 hover:bg-muted/50 rounded cursor-pointer group ${
               activeTabId === item.tabId ? "bg-muted" : ""
             } ${draggedItem?.tabId === item.tabId ? "opacity-50" : ""}`}
-            onClick={() => setActiveTabId(item.tabId)}
+            onClick={(e) => {
+              // Cmd/Ctrl-click: open in a new tab (duplicate)
+              const existing = tabs.find((t) => t.id === item.tabId)
+              if ((e as any).metaKey || (e as any).ctrlKey || (e as any).button === 1) {
+                if (!existing) return
+                const id = `tab-${Date.now()}-${Math.random().toString(36).slice(2,8)}`
+                const dup: Tab = { id, name: existing.name, content: existing.content, folderPath: existing.folderPath, view: existing.view }
+                setTabs((prev) => [...prev, dup])
+                setActiveTabId(id)
+                addFileToFolder(id, dup.name, dup.folderPath || 'Default')
+              } else {
+                if (existing) setActiveTabId(item.tabId)
+              }
+            }}
+            onDoubleClick={(e) => {
+              const existing = tabs.find((t) => t.id === item.tabId)
+              if (!existing) return
+              // Force text view for that tab and activate it (no duplicate)
+              setTabs((prev) => prev.map((t) => (t.id === existing.id ? { ...t, view: 'text' } : t)))
+              setActiveTabId(existing.id)
+            }}
             draggable
             onDragStart={(e) => handleDragStart(e, item)}
           >
@@ -2362,7 +2494,7 @@ function transform(input, context) {
           </div>
         </div>
 
-        <div className="p-2 overflow-auto h-full pb-20">
+        <div className="p-2 overflow-auto h-full pb-24 relative">
           {/* Favorites Section */}
           <div className="mb-4">
             <div className="flex items-center gap-2 mb-2">
@@ -2405,6 +2537,26 @@ function transform(input, context) {
               </button>
             </div>
             <div>{renderFolderTree(folderStructure)}</div>
+          </div>
+          {/* Upload area at bottom */}
+          <div className="absolute bottom-0 left-0 right-0 p-2 border-t border-border bg-background/95">
+            <div className="text-[11px] text-muted-foreground flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Upload size={12} className="opacity-60" />
+                <span>Drag text files here or</span>
+              </div>
+              <button className="text-xs px-2 py-1 border rounded bg-white hover:bg-gray-50" onClick={() => triggerUpload('Default')} title="Upload to Default">
+                Upload…
+              </button>
+            </div>
+            <input
+              ref={uploadInputRef}
+              type="file"
+              multiple
+              accept="text/*,.md,.markdown,.mdx,.txt,.json,.csv,.yaml,.yml,.xml,.html,.css,.js,.ts,.tsx,.py,.rb,.go,.java,.c,.cpp,.rs,.toml,.ini,.sh,.zsh,.bash,.log"
+              className="hidden"
+              onChange={(e) => handleFilesUpload(e.target.files, pendingUploadPath)}
+            />
           </div>
         </div>
       </div>
@@ -2461,6 +2613,29 @@ function transform(input, context) {
         </div>
 
         <div className="ml-auto flex items-center gap-2">
+          {activeTab && activeTab.view === 'table' ? (
+            <button
+              onClick={() => {
+                setTabs((prev) => prev.map((t) => (t.id === activeTabId ? { ...t, view: 'text' } : t)))
+              }}
+              className="p-2 hover:bg-muted/40 rounded"
+              title="View as Text"
+            >
+              <FileText size={16} />
+            </button>
+          ) : (
+            activeTab && isValidCsv(activeTab.content || '') && (
+              <button
+                onClick={() => {
+                  setTabs((prev) => prev.map((t) => (t.id === activeTabId ? { ...t, view: 'table' } : t)))
+                }}
+                className="p-2 hover:bg-muted/40 rounded"
+                title="View as Table"
+              >
+                <TableGlyph />
+              </button>
+            )
+          )}
           <button
             onClick={() => {
               setShowWorkbench(!showWorkbench)
@@ -2468,6 +2643,7 @@ function transform(input, context) {
                 setSplitView(false)
                 setShowMarkdownPreview(false)
                 setShowCopilot(false)
+                setShowAIWorkbench(false)
               }
             }}
             className={`p-2 hover:bg-muted/40 rounded ${showWorkbench ? "bg-muted" : ""}`}
@@ -2477,10 +2653,26 @@ function transform(input, context) {
           </button>
           <button
             onClick={() => {
+              setShowAIWorkbench(!showAIWorkbench)
+              if (!showAIWorkbench) {
+                setSplitView(false)
+                setShowMarkdownPreview(false)
+                setShowCopilot(false)
+                setShowWorkbench(false)
+              }
+            }}
+            className={`p-2 hover:bg-muted/40 rounded ${showAIWorkbench ? "bg-muted" : ""}`}
+            title="Toggle AI Workbench"
+          >
+            <Zap size={16} />
+          </button>
+          <button
+            onClick={() => {
               setShowCopilot(!showCopilot)
               if (!showCopilot) {
                 setSplitView(false)
                 setShowMarkdownPreview(false)
+                setShowAIWorkbench(false)
               }
             }}
             className={`p-2 hover:bg-muted/40 rounded ${showCopilot ? "bg-muted" : ""}`}
@@ -2494,6 +2686,7 @@ function transform(input, context) {
               setSplitView(false)
               setShowCopilot(false)
               setShowWorkbench(false)
+              setShowAIWorkbench(false)
             }}
             className={`p-2 hover:bg-muted/40 rounded ${showMarkdownPreview ? "bg-muted" : ""}`}
             title="Toggle Preview (⌃⌘P)"
@@ -2506,6 +2699,7 @@ function transform(input, context) {
               setShowMarkdownPreview(false)
               setShowCopilot(false)
               setShowWorkbench(false)
+              setShowAIWorkbench(false)
             }}
             className={`p-2 hover:bg-muted/40 rounded ${splitView ? "bg-muted" : ""}`}
             title="Toggle Split View (⌃⌘S)"
@@ -2523,33 +2717,40 @@ function transform(input, context) {
         <div
           ref={splitContainerRef}
           className={`${
-            splitView || showCopilot || showWorkbench ? "max-w-full" : editorSettings.fullWidth ? "max-w-full" : "max-w-[80%]"
-          } w-full h-full relative flex min-h-0 ${splitView || showCopilot || showWorkbench ? "gap-0" : "flex-col"}`}
+            splitView || showCopilot || showWorkbench || showAIWorkbench ? "max-w-full" : editorSettings.fullWidth ? "max-w-full" : "max-w-[80%]"
+          } w-full h-full relative flex min-h-0 ${splitView || showCopilot || showWorkbench || showAIWorkbench ? "gap-0" : "flex-col"}`}
         >
           <div
-            className={`${splitView || showCopilot || showWorkbench ? "" : "w-full"} h-full relative flex flex-col min-h-0`}
-            style={splitView || showCopilot || showWorkbench ? { width: `${splitRatio * 100}%` } : {}}
+            className={`${splitView || showCopilot || showWorkbench || showAIWorkbench ? "" : "w-full"} h-full relative flex flex-col min-h-0`}
+            style={splitView || showCopilot || showWorkbench || showAIWorkbench ? { width: `${splitRatio * 100}%` } : {}}
           >
             <div className="flex-1 pt-4">
-              <Editor
-                height="100%"
-                width="100%"
-                language="markdown"
-                theme={resolvedTheme === "dark" ? "custom-vs-dark" : "custom-vs"} // Use custom theme with dimmed line numbers
-                value={activeTab?.content || ""}
-                onChange={handleChange}
-                onMount={handleEditorDidMount}
-                options={{
-                  automaticLayout: false,
-                  scrollbar: {
-                    alwaysConsumeMouseWheel: true,
-                  },
-                  padding: {
-                    left: editorSettings.showGutter ? (editorSettings.fullWidth ? 8 : 0) : 16,
-                    bottom: 12,
-                  },
-                }}
-              />
+              {activeTab?.view === 'table' ? (
+                <TableView
+                  headers={(() => { const { headers } = parseCsv(activeTab?.content || ''); return headers })()}
+                  rows={(() => { const { rows } = parseCsv(activeTab?.content || ''); return rows })()}
+                  onRowsChange={(rows) => {
+                    const { headers, delimiter } = parseCsv(activeTab?.content || '')
+                    const csv = stringifyCsv(headers, rows, delimiter)
+                    setTabs((prev) => prev.map((t) => (t.id === activeTabId ? { ...t, content: csv } : t)))
+                  }}
+                />
+              ) : (
+                <Editor
+                  height="100%"
+                  width="100%"
+                  language="markdown"
+                  theme={resolvedTheme === "dark" ? "custom-vs-dark" : "custom-vs"}
+                  value={activeTab?.content || ""}
+                  onChange={handleChange}
+                  onMount={handleEditorDidMount}
+                  options={{
+                    automaticLayout: false,
+                    scrollbar: { alwaysConsumeMouseWheel: true },
+                    padding: { left: editorSettings.showGutter ? (editorSettings.fullWidth ? 8 : 0) : 16, bottom: 12 },
+                  }}
+                />
+              )}
             </div>
           </div>
 
@@ -3660,6 +3861,51 @@ function transform(input, context) {
                     </div>
                   </div>
                 )}
+              </div>
+            </>
+          )}
+
+          {showAIWorkbench && (
+            <>
+              <div
+                className={`w-2 cursor-col-resize flex-shrink-0 relative group ${
+                  isDragging ? "bg-primary" : ""
+                }`}
+                onMouseDown={handleMouseDown}
+              >
+                <div
+                  className="absolute inset-y-0 left-1 w-px bg-border group-hover:bg-primary/60 transition-colors"
+                  onMouseDown={handleMouseDown}
+                />
+              </div>
+
+              <div
+                className="h-full flex-shrink-0 flex flex-col min-h-0"
+                style={{ width: `${(1 - splitRatio) * 100}%` }}
+              >
+                <AIWorkbench
+                  activeTabContent={activeTab?.content || ""}
+                  activeTabName={activeTab?.name}
+                  onClose={() => setShowAIWorkbench(false)}
+                  onCreateNewTab={(content, name) => {
+                    const newTab: Tab = {
+                      id: `tab-${Date.now()}`,
+                      name,
+                      content,
+                    }
+                    setTabs((prev) => [...prev, newTab])
+                    setActiveTabId(newTab.id)
+                  }}
+                  onAppendToTab={(content) => {
+                    if (activeTab) {
+                      setTabs((prev) => prev.map((t) =>
+                        t.id === activeTabId
+                          ? { ...t, content: t.content + content }
+                          : t
+                      ))
+                    }
+                  }}
+                />
               </div>
             </>
           )}

@@ -9,6 +9,8 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
+  // Produce a standalone output so runtime doesn't need the Next CLI
+  output: 'standalone',
 }
 
 export default nextConfig
