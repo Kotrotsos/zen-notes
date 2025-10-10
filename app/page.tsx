@@ -35,6 +35,7 @@ import {
   Grid3X3,
   Zap,
   Sparkles,
+  Loader2,
 } from "lucide-react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
@@ -47,8 +48,8 @@ import TableView from "@/components/table-view"
 import AIWorkbench from "@/components/ai-workbench"
 import { parseCsv, stringifyCsv, isValidCsv } from "@/lib/csv"
 
-const TableGlyph = () => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+const TableGlyph = ({ size = 16 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
     <line x1="3" y1="9" x2="21" y2="9"></line>
     <line x1="3" y1="15" x2="21" y2="15"></line>
@@ -256,6 +257,27 @@ export default function ZenNotes() {
   const [folderStructure, setFolderStructure] = useState<FolderItem[]>([])
   const [favorites, setFavorites] = useState<string[]>([])
   const [appPrefs, setAppPrefs] = useState<AppPrefs>({ skipDeleteConfirm: false })
+  const [activity, setActivity] = useState<{ active: boolean; msg?: string }>({ active: false })
+  const funWords = useRef<string[]>([
+    'Jossing', 'Transputing', 'Waffling', 'Zesting', 'Fluxing', 'Recombobulating', 'Frobnitzing', 'Yeeting', 'Jazzifying', 'Defragmenting'
+  ])
+  const [funWord, setFunWord] = useState<string>('')
+  useEffect(() => {
+    let t: any
+    if (!isLoaded || activity.active) {
+      setFunWord(funWords.current[Math.floor(Math.random() * funWords.current.length)])
+      t = setInterval(() => {
+        setFunWord((prev) => {
+          let next = prev
+          while (next === prev) {
+            next = funWords.current[Math.floor(Math.random() * funWords.current.length)]
+          }
+          return next
+        })
+      }, 1200)
+    }
+    return () => { if (t) clearInterval(t) }
+  }, [activity.active, isLoaded])
   const [editingFolderId, setEditingFolderId] = useState<string | null>(null)
   const [editingFolderName, setEditingFolderName] = useState("")
   const [editorSettings, setEditorSettings] = useState<EditorSettings>({
@@ -300,6 +322,7 @@ export default function ZenNotes() {
 
   const handleFilesUpload = async (fileList: FileList | null, targetPath: string) => {
     if (!fileList || fileList.length === 0) return
+    try { setActivity({ active: true, msg: 'Uploading' }) } catch {}
     const textLikeExt = new Set(['.md','.markdown','.mdx','.txt','.json','.csv','.yaml','.yml','.xml','.html','.css','.js','.ts','.tsx','.py','.rb','.go','.java','.c','.cpp','.rs','.toml','.ini','.sh','.zsh','.bash','.log'])
     for (const f of Array.from(fileList)) {
       const isText = (f.type && f.type.startsWith('text')) || Array.from(textLikeExt).some(ext => f.name.toLowerCase().endsWith(ext))
@@ -314,6 +337,7 @@ export default function ZenNotes() {
       setActiveTabId(id)
       addFileToFolder(id, name, folderPath)
     }
+    try { setActivity({ active: false }) } catch {}
   }
 
   const triggerUpload = (targetPath: string) => {
@@ -1233,6 +1257,16 @@ function transform(input, context) {
     setTabs((prev) => [...prev, newTab])
     setActiveTabId(newTab.id)
   }
+
+  // Light-weight render indicator when switching heavy views
+  useEffect(() => {
+    if (!activeTab) return
+    if (activeTab.view === 'table' && (activeTab.content?.length || 0) > 20000) {
+      setActivity({ active: true, msg: 'Tabulizing' })
+      const id = setTimeout(() => setActivity({ active: false }), 400)
+      return () => clearTimeout(id)
+    }
+  }, [activeTab?.id, activeTab?.view])
 
   const closeTab = (tabId: string) => {
     const openTabs = tabs.filter((t) => t.isOpen !== false)
@@ -2505,11 +2539,14 @@ function transform(input, context) {
             draggable
             onDragStart={(e) => handleDragStart(e, item)}
           >
-            {item.name?.toLowerCase().endsWith('.prompt') ? (
-              <Sparkles size={12} className="text-purple-500" />
-            ) : (
-              <File size={12} className="text-muted-foreground" />
-            )}
+            {(() => {
+              const fileTab = tabs.find((t) => t.id === item.tabId)
+              const isPrompt = fileTab?.name?.toLowerCase().endsWith('.prompt')
+              const isTable = fileTab?.view === 'table' || fileTab?.name?.toLowerCase().endsWith('.csv')
+              if (isPrompt) return <Sparkles size={12} className="text-purple-500" />
+              if (isTable) return <TableGlyph size={12} />
+              return <File size={12} className="text-muted-foreground" />
+            })()}
             <span className="text-xs flex-1">{item.name}</span>
             <button
               onClick={(e) => {
@@ -2652,11 +2689,13 @@ function transform(input, context) {
                         setActiveTabId(tabId)
                       }}
                     >
-                      {tab.name?.toLowerCase().endsWith('.prompt') ? (
-                        <Sparkles size={12} className="text-purple-500" />
-                      ) : (
-                        <File size={12} className="text-muted-foreground" />
-                      )}
+                      {(() => {
+                        const isPrompt = tab.name?.toLowerCase().endsWith('.prompt')
+                        const isTable = tab.view === 'table' || tab.name?.toLowerCase().endsWith('.csv')
+                        if (isPrompt) return <Sparkles size={12} className="text-purple-500" />
+                        if (isTable) return <TableGlyph size={12} />
+                        return <File size={12} className="text-muted-foreground" />
+                      })()}
                       <span className="text-xs">{tab.name}</span>
                     </div>
                   )
@@ -2710,7 +2749,7 @@ function transform(input, context) {
             <div
               key={tab.id}
               className={`flex items-center gap-2 px-3 py-2 border-r border-border cursor-pointer hover:bg-muted/40 ${
-                tab.id === activeTabId ? "bg-background" : ""
+                tab.id === activeTabId ? "bg-background border-b-2 border-blue-500 text-blue-600" : ""
               }`}
               onClick={() => setActiveTabId(tab.id)}
               onMouseEnter={(e) => handleTabMouseEnter(tab.id, e)}
@@ -3853,6 +3892,7 @@ function transform(input, context) {
                           size="sm"
                           variant="default"
                           onClick={() => {
+                            try { setActivity({ active: true, msg: 'Applying' }) } catch {}
                             const baseActiveContent = activeTab?.content || ''
                             const tagRe = /\{\{\s*([\w.-]+)\s*\}\}/g
                             const applyMap = (text: string, map: Record<string, string>): string => text.replace(tagRe, (_, k) => (k in map ? map[k] : _))
@@ -3895,6 +3935,7 @@ function transform(input, context) {
                               if (mergeDownload) {
                                 for (const out of outputs) { try { const blob = new Blob([out.content], { type: 'text/markdown;charset=utf-8' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = out.name || 'output.md'; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url) } catch {} }
                               }
+                              try { setActivity({ active: false }) } catch {}
                               return
                             }
                             const applyToContent = (content: string, isActive: boolean): string => {
@@ -3908,6 +3949,7 @@ function transform(input, context) {
                               return applyMap(content, maps[0])
                             }
                             if (wbAllTabs) { setTabs((prev) => prev.map((t) => ({ ...t, content: applyToContent(t.content, t.id === activeTabId) }))) } else { setTabs((prev) => prev.map((t) => (t.id === activeTabId ? { ...t, content: applyToContent(t.content, true) } : t))) }
+                            try { setActivity({ active: false }) } catch {}
                           }}
                         >
                           Apply
@@ -4027,6 +4069,7 @@ function transform(input, context) {
                   activeTabContent={activeTab?.content || ""}
                   activeTabName={activeTab?.name}
                   onClose={() => setShowAIWorkbench(false)}
+                  onActivityChange={(active) => setActivity({ active, msg: active ? 'Cogitating' : undefined })}
                   onCreateNewTab={(content, name) => {
                     const newTab: Tab = {
                       id: `tab-${Date.now()}`,
@@ -4780,6 +4823,14 @@ function transform(input, context) {
           </div>
         </div>
         <div className="flex items-center gap-4 px-4">
+          {(!isLoaded || activity.active) && (
+            <span className="flex items-center gap-2 text-blue-600">
+              <Loader2 className="size-4 animate-spin" />
+              <span className="text-xs font-medium">
+                {funWord || 'Loading'}{activity.msg ? ` — ${activity.msg}` : ''}
+              </span>
+            </span>
+          )}
           <span className="hidden lg:inline text-muted-foreground/60">
             ⌘E Explorer • ⌘⇧P Preview • ⌘⇧S Split • ⌘K Copilot
           </span>
@@ -4904,11 +4955,13 @@ function transform(input, context) {
                 onClick={() => handleChatAtReferenceSelect(item)}
               >
                 {item.type === "file" && (
-                  (item.name?.toLowerCase().endsWith('.prompt') || item.path?.toLowerCase().endsWith('.prompt')) ? (
-                    <Sparkles size={14} className="text-purple-500" />
-                  ) : (
-                    <FileText size={14} className="text-blue-500" />
-                  )
+                  (() => {
+                    const isPrompt = item.name?.toLowerCase().endsWith('.prompt') || item.path?.toLowerCase().endsWith('.prompt')
+                    const isTable = item.name?.toLowerCase().endsWith('.csv') || (() => { const t = tabs.find((x) => x.name === item.name); return t?.view === 'table' })()
+                    if (isPrompt) return <Sparkles size={14} className="text-purple-500" />
+                    if (isTable) return <TableGlyph size={14} />
+                    return <FileText size={14} className="text-blue-500" />
+                  })()
                 )}
                 {item.type === "folder" && <Folder size={14} className="text-yellow-500" />}
                 {item.type === "special" && <MessageSquare size={14} className="text-green-500" />}

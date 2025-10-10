@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState, useRef, useEffect } from "react"
+import React, { useState, useRef, useEffect, useMemo } from "react"
 import { X, Play, Square, ChevronDown, ChevronUp, Zap, FilePlus, FileText, Download } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -19,6 +19,7 @@ interface AIWorkbenchProps {
   availablePrompts?: Array<{ id: string; name: string; content: string; folderPath?: string }>
   onSavePrompt?: (name: string, content: string, folderPath?: string) => void
   selectedPromptId?: string
+  onActivityChange?: (active: boolean) => void
 }
 
 type SeparatorType = "none" | "newline" | "blank-line" | "word" | "characters" | "custom"
@@ -31,7 +32,7 @@ interface ChunkResult {
   error?: string
 }
 
-export default function AIWorkbench({ activeTabContent, activeTabName, onClose, onCreateNewTab, onAppendToTab, availablePrompts = [], onSavePrompt, selectedPromptId }: AIWorkbenchProps) {
+export default function AIWorkbench({ activeTabContent, activeTabName, onClose, onCreateNewTab, onAppendToTab, availablePrompts = [], onSavePrompt, selectedPromptId, onActivityChange }: AIWorkbenchProps) {
   // Settings
   const [model, setModel] = useState("gpt-4.1")
   const [prompt, setPrompt] = useState("Summarize the following text:")
@@ -67,6 +68,16 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
   const [exportAction, setExportAction] = useState<string>("new-tab")
   const [includeHeaders, setIncludeHeaders] = useState(true)
   const abortControllerRef = useRef<AbortController | null>(null)
+  const promptVars = useMemo(() => {
+    const vars = new Set<string>()
+    if (!prompt) return vars
+    const re = /\{\{\s*(\w+)\s*\}\}/g
+    let m: RegExpExecArray | null
+    while ((m = re.exec(prompt)) !== null) {
+      if (m[1]) vars.add(m[1])
+    }
+    return vars
+  }, [prompt])
 
   // Detect CSV on content change
   useEffect(() => {
@@ -207,14 +218,23 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
       // For CSV mode, parse the row and interpolate variables
       let actualChunk = chunk
       let actualPrompt = prompt
+      let includeChunk = true
 
       if (isCsvMode) {
         try {
           const rowData = JSON.parse(chunk)
+          // Check if the prompt uses any variables from the row
+          let hasMatchingVars = false
+          for (const v of promptVars) {
+            if (Object.prototype.hasOwnProperty.call(rowData, v)) { hasMatchingVars = true; break }
+          }
+
           actualPrompt = interpolatePrompt(prompt, rowData)
-          actualChunk = Object.entries(rowData)
+          const rowText = Object.entries(rowData)
             .map(([key, value]) => `${key}: ${value}`)
             .join('\n')
+          includeChunk = !hasMatchingVars // if variables are used, don't append the row as a chat turn
+          actualChunk = includeChunk ? rowText : ""
         } catch (e) {
           console.error('Failed to parse CSV row:', e)
         }
@@ -249,6 +269,7 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
           model,
           temperature,
           maxTokens,
+          includeChunk,
         }),
         signal: abortControllerRef.current?.signal,
       })
@@ -385,9 +406,19 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
     }
   }, [isDragging])
 
+  // Precompute chunks to avoid re-parsing on every keystroke
+  const memoChunks = useMemo(() => createChunks(activeTabContent), [activeTabContent, isCsvMode, csvRowLimit, separatorType, customSeparator, wordCount, charCount])
+  const largeData = useMemo(() => {
+    const chars = activeTabContent?.length || 0
+    const count = memoChunks.length
+    const overRows = count >= 500
+    const overChars = chars >= 200_000 // ~200 KB
+    return { over: overRows || overChars, count, chars }
+  }, [activeTabContent, memoChunks])
+
   // Process all chunks sequentially
   const handleRun = async () => {
-    const chunksToProcess = createChunks(activeTabContent)
+    const chunksToProcess = memoChunks
 
     if (chunksToProcess.length === 0) {
       return
@@ -403,6 +434,7 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
       }))
     )
     setIsProcessing(true)
+    try { onActivityChange?.(true) } catch {}
     setCurrentChunkIndex(0)
 
     abortControllerRef.current = new AbortController()
@@ -415,6 +447,7 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
 
     setIsProcessing(false)
     setCurrentChunkIndex(0)
+    try { onActivityChange?.(false) } catch {}
   }
 
   // Stop processing
@@ -422,6 +455,7 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
     if (abortControllerRef.current) {
       abortControllerRef.current.abort()
       setIsProcessing(false)
+      try { onActivityChange?.(false) } catch {}
     }
   }
 
@@ -716,10 +750,18 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
         {/* Run/Stop Button */}
         <div className="pt-2">
           {!isProcessing ? (
-            <Button onClick={handleRun} className="w-full" size="sm" disabled={!prompt.trim()}>
-              <Play size={14} className="mr-2" />
-              Run on {createChunks(activeTabContent).length} chunk(s)
-            </Button>
+            <>
+              {/* Data weight warning */}
+              {largeData.over && (
+                <div className="mb-2 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                  Large input detected ({largeData.count} chunks, ~{Math.round(largeData.chars/1024)} KB). Consider using Row Limit or coarser chunking for speed.
+                </div>
+              )}
+              <Button onClick={handleRun} className="w-full" size="sm" disabled={!prompt.trim()}>
+                <Play size={14} className="mr-2" />
+                Run on {memoChunks.length} chunk(s)
+              </Button>
+            </>
           ) : (
             <Button onClick={handleStop} variant="destructive" className="w-full" size="sm">
               <Square size={14} className="mr-2" />

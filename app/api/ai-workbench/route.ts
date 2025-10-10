@@ -8,12 +8,14 @@ export async function POST(req: Request) {
       model,
       temperature,
       maxTokens,
+      includeChunk,
     }: {
       prompt: string
       chunk: string
       model?: string
       temperature?: number
       maxTokens?: number
+      includeChunk?: boolean
     } = await req.json()
 
     console.log('AI Workbench API called:', {
@@ -25,9 +27,9 @@ export async function POST(req: Request) {
       maxTokens
     })
 
-    if (!prompt || !chunk) {
+    if (!prompt) {
       return new Response(
-        `event: error\ndata: ${JSON.stringify({ error: 'Prompt and chunk are required' })}\n\n`,
+        `event: error\ndata: ${JSON.stringify({ error: 'Prompt is required' })}\n\n`,
         {
           status: 400,
           headers: { 'Content-Type': 'text/event-stream' },
@@ -35,8 +37,8 @@ export async function POST(req: Request) {
       )
     }
 
-    // Construct the full prompt with the chunk
-    const fullPrompt = `${prompt}\n\n${chunk}`
+    // Construct the full prompt, optionally appending the chunk
+    const fullPrompt = includeChunk === false ? prompt : `${prompt}\n\n${chunk || ''}`
 
     // Build the input for the Responses API
     const input = [
