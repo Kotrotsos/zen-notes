@@ -49,7 +49,7 @@ import AIWorkbench from "@/components/ai-workbench"
 import { parseCsv, stringifyCsv, isValidCsv } from "@/lib/csv"
 import { Workflow, WorkflowMetadata } from '@/lib/workflow-types'
 import { fetchBuiltInWorkflows, parseWorkflowFile } from '@/lib/workflow-service'
-import { FileCode, Save } from 'lucide-react'
+import { FileCode } from 'lucide-react'
 
 const TableGlyph = ({ size = 16 }: { size?: number }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
