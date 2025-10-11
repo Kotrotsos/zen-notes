@@ -47,6 +47,9 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import TableView from "@/components/table-view"
 import AIWorkbench from "@/components/ai-workbench"
 import { parseCsv, stringifyCsv, isValidCsv } from "@/lib/csv"
+import { Workflow, WorkflowMetadata } from '@/lib/workflow-types'
+import { fetchBuiltInWorkflows, parseWorkflowFile } from '@/lib/workflow-service'
+import { FileCode } from 'lucide-react'
 
 const TableGlyph = ({ size = 16 }: { size?: number }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -236,6 +239,7 @@ export default function ZenNotes() {
   const initialUI = getInitialUIState() as Partial<UIState>
   const [tabs, setTabs] = useState<Tab[]>([])
   const [activeTabId, setActiveTabId] = useState<string>("")
+  const [availableWorkflows, setAvailableWorkflows] = useState<Workflow[]>([])
   const [isLoaded, setIsLoaded] = useState(false)
   const [editingTabId, setEditingTabId] = useState<string | null>(null)
   const [editingName, setEditingName] = useState("")
@@ -262,6 +266,17 @@ export default function ZenNotes() {
     'Jossing', 'Transputing', 'Waffling', 'Zesting', 'Fluxing', 'Recombobulating', 'Frobnitzing', 'Yeeting', 'Jazzifying', 'Defragmenting'
   ])
   const [funWord, setFunWord] = useState<string>('')
+  const setBusy = useCallback((active: boolean, msg?: string) => {
+    setActivity({ active, msg })
+  }, [])
+  const runWithActivity = useCallback(async (msg: string, fn: () => Promise<any>) => {
+    setBusy(true, msg)
+    try {
+      return await fn()
+    } finally {
+      setBusy(false)
+    }
+  }, [setBusy])
   useEffect(() => {
     let t: any
     if (!isLoaded || activity.active) {
@@ -322,22 +337,22 @@ export default function ZenNotes() {
 
   const handleFilesUpload = async (fileList: FileList | null, targetPath: string) => {
     if (!fileList || fileList.length === 0) return
-    try { setActivity({ active: true, msg: 'Uploading' }) } catch {}
-    const textLikeExt = new Set(['.md','.markdown','.mdx','.txt','.json','.csv','.yaml','.yml','.xml','.html','.css','.js','.ts','.tsx','.py','.rb','.go','.java','.c','.cpp','.rs','.toml','.ini','.sh','.zsh','.bash','.log'])
-    for (const f of Array.from(fileList)) {
-      const isText = (f.type && f.type.startsWith('text')) || Array.from(textLikeExt).some(ext => f.name.toLowerCase().endsWith(ext))
-      if (!isText) continue
-      let content = ''
-      try { content = await f.text() } catch { continue }
-      const id = `tab-${Date.now()}-${Math.random().toString(36).slice(2,8)}`
-      const name = f.name
-      const folderPath = targetPath || 'Default'
-      const view: 'text' | 'table' = name.toLowerCase().endsWith('.csv') ? 'table' : 'text'
-      setTabs((prev) => [...prev, { id, name, content, folderPath, view }])
-      setActiveTabId(id)
-      addFileToFolder(id, name, folderPath)
-    }
-    try { setActivity({ active: false }) } catch {}
+    await runWithActivity('Uploading', async () => {
+      const textLikeExt = new Set(['.md','.markdown','.mdx','.txt','.json','.csv','.yaml','.yml','.xml','.html','.css','.js','.ts','.tsx','.py','.rb','.go','.java','.c','.cpp','.rs','.toml','.ini','.sh','.zsh','.bash','.log'])
+      for (const f of Array.from(fileList)) {
+        const isText = (f.type && f.type.startsWith('text')) || Array.from(textLikeExt).some(ext => f.name.toLowerCase().endsWith(ext))
+        if (!isText) continue
+        let content = ''
+        try { content = await f.text() } catch { continue }
+        const id = `tab-${Date.now()}-${Math.random().toString(36).slice(2,8)}`
+        const name = f.name
+        const folderPath = targetPath || 'Default'
+        const view: 'text' | 'table' = name.toLowerCase().endsWith('.csv') ? 'table' : 'text'
+        setTabs((prev) => [...prev, { id, name, content, folderPath, view }])
+        setActiveTabId(id)
+        addFileToFolder(id, name, folderPath)
+      }
+    })
   }
 
   const triggerUpload = (targetPath: string) => {
@@ -1262,11 +1277,11 @@ function transform(input, context) {
   useEffect(() => {
     if (!activeTab) return
     if (activeTab.view === 'table' && (activeTab.content?.length || 0) > 20000) {
-      setActivity({ active: true, msg: 'Tabulizing' })
-      const id = setTimeout(() => setActivity({ active: false }), 400)
+      setBusy(true, 'Tabulizing')
+      const id = setTimeout(() => setBusy(false), 400)
       return () => clearTimeout(id)
     }
-  }, [activeTab?.id, activeTab?.view])
+  }, [activeTab?.id, activeTab?.view, activeTab?.content, setBusy])
 
   const closeTab = (tabId: string) => {
     const openTabs = tabs.filter((t) => t.isOpen !== false)
@@ -1465,6 +1480,49 @@ function transform(input, context) {
 
     return items
   }, [folderStructure, tabs])
+
+  const loadWorkflows = useCallback(async () => {
+    try {
+      // Load built-in workflows
+      const builtIn = await fetchBuiltInWorkflows()
+      const builtInWorkflows: Workflow[] = builtIn.map((w, idx) => {
+        const { metadata, body } = parseWorkflowFile(w.content)
+        return {
+          id: `builtin-${idx}-${metadata.name.replace(/\s+/g, '-').toLowerCase()}`,
+          name: `${metadata.name}.workflow`,
+          content: w.content,
+          isBuiltIn: true,
+          metadata
+        }
+      })
+
+      // Load custom workflows from tabs
+      const customWorkflows: Workflow[] = []
+      const workflowTabs = tabs.filter(t =>
+        t.name?.toLowerCase().endsWith('.workflow')
+      )
+
+      for (const tab of workflowTabs) {
+        try {
+          const { metadata } = parseWorkflowFile(tab.content)
+          customWorkflows.push({
+            id: tab.id,
+            name: tab.name,
+            content: tab.content,
+            folderPath: tab.folderPath,
+            isBuiltIn: false,
+            metadata
+          })
+        } catch (err) {
+          console.error(`Failed to parse workflow ${tab.name}:`, err)
+        }
+      }
+
+      setAvailableWorkflows([...builtInWorkflows, ...customWorkflows])
+    } catch (err) {
+      console.error('Failed to load workflows:', err)
+    }
+  }, [tabs])
 
   const handleEditorDidMount = useCallback(
     (editor: any, monaco: any) => {
@@ -1872,6 +1930,10 @@ function transform(input, context) {
   useEffect(() => {
     showAtReferenceRef.current = showAtReference
   }, [showAtReference])
+
+  useEffect(() => {
+    loadWorkflows()
+  }, [loadWorkflows])
 
   const autoSave = (data: AppData) => {
     if (autoSaveTimeoutRef.current) {
@@ -2542,8 +2604,10 @@ function transform(input, context) {
             {(() => {
               const fileTab = tabs.find((t) => t.id === item.tabId)
               const isPrompt = fileTab?.name?.toLowerCase().endsWith('.prompt')
+              const isWorkflow = fileTab?.name?.toLowerCase().endsWith('.workflow')
               const isTable = fileTab?.view === 'table' || fileTab?.name?.toLowerCase().endsWith('.csv')
               if (isPrompt) return <Sparkles size={12} className="text-purple-500" />
+              if (isWorkflow) return <FileCode size={12} className="text-purple-500" />
               if (isTable) return <TableGlyph size={12} />
               return <File size={12} className="text-muted-foreground" />
             })()}
@@ -2691,8 +2755,10 @@ function transform(input, context) {
                     >
                       {(() => {
                         const isPrompt = tab.name?.toLowerCase().endsWith('.prompt')
+                        const isWorkflow = tab.name?.toLowerCase().endsWith('.workflow')
                         const isTable = tab.view === 'table' || tab.name?.toLowerCase().endsWith('.csv')
                         if (isPrompt) return <Sparkles size={12} className="text-purple-500" />
+                        if (isWorkflow) return <FileCode size={12} className="text-purple-500" />
                         if (isTable) return <TableGlyph size={12} />
                         return <File size={12} className="text-muted-foreground" />
                       })()}
@@ -3891,65 +3957,64 @@ function transform(input, context) {
                         <Button
                           size="sm"
                           variant="default"
-                          onClick={() => {
-                            try { setActivity({ active: true, msg: 'Applying' }) } catch {}
-                            const baseActiveContent = activeTab?.content || ''
-                            const tagRe = /\{\{\s*([\w.-]+)\s*\}\}/g
-                            const applyMap = (text: string, map: Record<string, string>): string => text.replace(tagRe, (_, k) => (k in map ? map[k] : _))
-                            const buildMaps = (): Record<string, string>[] => {
-                              if (mergeDataMode === 'csv') {
-                                const parseCsv = (text: string) => {
-                                  const rows: string[][] = []
-                                  let row: string[] = []
-                                  let cell = ''
-                                  let inQuotes = false
-                                  for (let i = 0; i < text.length; i++) {
-                                    const ch = text[i]
-                                    if (inQuotes) { if (ch === '"') { if (text[i + 1] === '"') { cell += '"'; i++ } else { inQuotes = false } } else { cell += ch } }
-                                    else { if (ch === '"') inQuotes = true; else if (ch === ',') { row.push(cell); cell = '' } else if (ch === '\n' || ch === '\r') { if (ch === '\r' && text[i + 1] === '\n') i++; row.push(cell); rows.push(row); row = []; cell = '' } else { cell += ch } }
+                          onClick={async () => {
+                            await runWithActivity('Applying', async () => {
+                              const baseActiveContent = activeTab?.content || ''
+                              const tagRe = /\{\{\s*([\w.-]+)\s*\}\}/g
+                              const applyMap = (text: string, map: Record<string, string>): string => text.replace(tagRe, (_, k) => (k in map ? map[k] : _))
+                              const buildMaps = (): Record<string, string>[] => {
+                                if (mergeDataMode === 'csv') {
+                                  const parseCsv = (text: string) => {
+                                    const rows: string[][] = []
+                                    let row: string[] = []
+                                    let cell = ''
+                                    let inQuotes = false
+                                    for (let i = 0; i < text.length; i++) {
+                                      const ch = text[i]
+                                      if (inQuotes) { if (ch === '"') { if (text[i + 1] === '"') { cell += '"'; i++ } else { inQuotes = false } } else { cell += ch } }
+                                      else { if (ch === '"') inQuotes = true; else if (ch === ',') { row.push(cell); cell = '' } else if (ch === '\n' || ch === '\r') { if (ch === '\r' && text[i + 1] === '\n') i++; row.push(cell); rows.push(row); row = []; cell = '' } else { cell += ch } }
+                                    }
+                                    if (cell.length > 0 || row.length > 0) { row.push(cell); rows.push(row) }
+                                    return rows
                                   }
-                                  if (cell.length > 0 || row.length > 0) { row.push(cell); rows.push(row) }
-                                  return rows
-                                }
-                                const rows = parseCsv(mergeCsvText || '')
-                                if (rows.length < 2) return []
-                                const headers = rows[0]
-                                return rows.slice(1).map((values) => { const map: Record<string, string> = {}; headers.forEach((h, i) => { map[h.trim()] = (values[i] ?? '').trim() }); return map })
-                              } else {
-                                let arr: any[] = []
-                                try { arr = JSON.parse(mergeJsonText || '[]') } catch {}
-                                if (!Array.isArray(arr) || arr.length === 0) return []
-                                return arr.map((obj) => (obj && typeof obj === 'object' ? obj : {}))
-                              }
-                            }
-                            const buildFilename = (map: Record<string, string>) => mergeFilenameTemplate.replace(/\{\{\s*([\w.-]+)\s*\}\}/g, (_, k) => (k in map ? map[k] : _))
-                            const selectionRangeForNonActive = (content: string): { start: number; end: number } | null => null
-                            const maps = mergeBatch ? buildMaps() : (() => { const single = buildMaps(); const idx = mergeSelectedRow; return single.length ? [single[Math.min(Math.max(0, idx), single.length - 1)]] : [] })()
-                            if (!maps.length) return
-                            if (mergeBatch) {
-                              const sourceText = (() => { if (wbUseSelection && editorRef.current) { const editor = editorRef.current as any; const model = editor.getModel(); const sel = editor.getSelection(); if (sel && !sel.isEmpty()) return model.getValueInRange(sel) } return baseActiveContent })()
-                              const outputs = maps.map((map) => ({ name: buildFilename(map), content: applyMap(sourceText, map), data: map }))
-                              if (mergeCreateTabs) {
-                                setTabs((prev) => { const next = [...prev]; for (const out of outputs) { const id = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`; const folderPath = (mergeFolderTemplate || 'Default').replace(/\{\{\s*([\w.-]+)\s*\}\}/g, (_: any, k: string) => (k in (out.data as any) ? (out.data as any)[k] : _)); next.push({ id, name: out.name, content: out.content, folderPath }); addFileToFolder(id, out.name, folderPath) } return next })
-                              }
-                              if (mergeDownload) {
-                                for (const out of outputs) { try { const blob = new Blob([out.content], { type: 'text/markdown;charset=utf-8' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = out.name || 'output.md'; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url) } catch {} }
-                              }
-                              try { setActivity({ active: false }) } catch {}
-                              return
-                            }
-                            const applyToContent = (content: string, isActive: boolean): string => {
-                              if (wbUseSelection) {
-                                if (isActive && editorRef.current) {
-                                  const editor = editorRef.current as any; const model = editor.getModel(); const sel = editor.getSelection(); if (sel && !sel.isEmpty()) { const start = model.getOffsetAt(sel.getStartPosition()); const end = model.getOffsetAt(sel.getEndPosition()); const snippet = model.getValueInRange(sel); const rep = applyMap(snippet, maps[0]); return content.slice(0, start) + rep + content.slice(end) }
+                                  const rows = parseCsv(mergeCsvText || '')
+                                  if (rows.length < 2) return []
+                                  const headers = rows[0]
+                                  return rows.slice(1).map((values) => { const map: Record<string, string> = {}; headers.forEach((h, i) => { map[h.trim()] = (values[i] ?? '').trim() }); return map })
                                 } else {
-                                  const rng = selectionRangeForNonActive(content); if (rng) { const snippet = content.slice(rng.start, rng.end); const rep = applyMap(snippet, maps[0]); return content.slice(0, rng.start) + rep + content.slice(rng.end) }
+                                  let arr: any[] = []
+                                  try { arr = JSON.parse(mergeJsonText || '[]') } catch {}
+                                  if (!Array.isArray(arr) || arr.length === 0) return []
+                                  return arr.map((obj) => (obj && typeof obj === 'object' ? obj : {}))
                                 }
                               }
-                              return applyMap(content, maps[0])
-                            }
-                            if (wbAllTabs) { setTabs((prev) => prev.map((t) => ({ ...t, content: applyToContent(t.content, t.id === activeTabId) }))) } else { setTabs((prev) => prev.map((t) => (t.id === activeTabId ? { ...t, content: applyToContent(t.content, true) } : t))) }
-                            try { setActivity({ active: false }) } catch {}
+                              const buildFilename = (map: Record<string, string>) => mergeFilenameTemplate.replace(/\{\{\s*([\w.-]+)\s*\}\}/g, (_, k) => (k in map ? map[k] : _))
+                              const selectionRangeForNonActive = (content: string): { start: number; end: number } | null => null
+                              const maps = mergeBatch ? buildMaps() : (() => { const single = buildMaps(); const idx = mergeSelectedRow; return single.length ? [single[Math.min(Math.max(0, idx), single.length - 1)]] : [] })()
+                              if (!maps.length) return
+                              if (mergeBatch) {
+                                const sourceText = (() => { if (wbUseSelection && editorRef.current) { const editor = editorRef.current as any; const model = editor.getModel(); const sel = editor.getSelection(); if (sel && !sel.isEmpty()) return model.getValueInRange(sel) } return baseActiveContent })()
+                                const outputs = maps.map((map) => ({ name: buildFilename(map), content: applyMap(sourceText, map), data: map }))
+                                if (mergeCreateTabs) {
+                                  setTabs((prev) => { const next = [...prev]; for (const out of outputs) { const id = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`; const folderPath = (mergeFolderTemplate || 'Default').replace(/\{\{\s*([\w.-]+)\s*\}\}/g, (_: any, k: string) => (k in (out.data as any) ? (out.data as any)[k] : _)); next.push({ id, name: out.name, content: out.content, folderPath, isOpen: true }); addFileToFolder(id, out.name, folderPath) } return next })
+                                }
+                                if (mergeDownload) {
+                                  for (const out of outputs) { try { const blob = new Blob([out.content], { type: 'text/markdown;charset=utf-8' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = out.name || 'output.md'; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url) } catch {} }
+                                }
+                                return
+                              }
+                              const applyToContent = (content: string, isActive: boolean): string => {
+                                if (wbUseSelection) {
+                                  if (isActive && editorRef.current) {
+                                    const editor = editorRef.current as any; const model = editor.getModel(); const sel = editor.getSelection(); if (sel && !sel.isEmpty()) { const start = model.getOffsetAt(sel.getStartPosition()); const end = model.getOffsetAt(sel.getEndPosition()); const snippet = model.getValueInRange(sel); const rep = applyMap(snippet, maps[0]); return content.slice(0, start) + rep + content.slice(end) }
+                                  } else {
+                                    const rng = selectionRangeForNonActive(content); if (rng) { const snippet = content.slice(rng.start, rng.end); const rep = applyMap(snippet, maps[0]); return content.slice(0, rng.start) + rep + content.slice(rng.end) }
+                                  }
+                                }
+                                return applyMap(content, maps[0])
+                              }
+                              if (wbAllTabs) { setTabs((prev) => prev.map((t) => ({ ...t, content: applyToContent(t.content, t.id === activeTabId) }))) } else { setTabs((prev) => prev.map((t) => (t.id === activeTabId ? { ...t, content: applyToContent(t.content, true) } : t))) }
+                            })
                           }}
                         >
                           Apply
@@ -4069,7 +4134,7 @@ function transform(input, context) {
                   activeTabContent={activeTab?.content || ""}
                   activeTabName={activeTab?.name}
                   onClose={() => setShowAIWorkbench(false)}
-                  onActivityChange={(active) => setActivity({ active, msg: active ? 'Cogitating' : undefined })}
+                  onActivityChange={(active) => setBusy(active, active ? 'Cogitating' : undefined)}
                   onCreateNewTab={(content, name) => {
                     const newTab: Tab = {
                       id: `tab-${Date.now()}`,
@@ -4111,6 +4176,31 @@ function transform(input, context) {
                     })
                   }}
                   selectedPromptId={workbenchSelectedPromptId}
+                  availableWorkflows={availableWorkflows}
+                  onSaveWorkflow={(name, content, folderPath = 'Workflows', metadata) => {
+                    setTabs((prev) => {
+                      // If a workflow with the same name exists, overwrite its content
+                      const existingIndex = prev.findIndex((t) => t.name === name)
+                      if (existingIndex !== -1) {
+                        const next = [...prev]
+                        next[existingIndex] = { ...next[existingIndex], content, folderPath }
+                        return next
+                      }
+                      const id = `tab-${Date.now()}-${Math.random().toString(36).slice(2,8)}`
+                      const view: 'text' | 'table' = 'text'
+                      const next = [...prev, { id, name, content, folderPath, view, isOpen: true }]
+                      // update folder structure
+                      addFileToFolder(id, name, folderPath)
+                      setActiveTabId(id)
+                      return next
+                    })
+                  }}
+                  onDeleteWorkflow={(id) => {
+                    const workflow = availableWorkflows.find(w => w.id === id)
+                    if (!workflow || workflow.isBuiltIn) return
+
+                    setTabs((prev) => prev.filter((t) => t.id !== id))
+                  }}
                 />
               </div>
             </>
@@ -4957,8 +5047,10 @@ function transform(input, context) {
                 {item.type === "file" && (
                   (() => {
                     const isPrompt = item.name?.toLowerCase().endsWith('.prompt') || item.path?.toLowerCase().endsWith('.prompt')
+                    const isWorkflow = item.name?.toLowerCase().endsWith('.workflow') || item.path?.toLowerCase().endsWith('.workflow')
                     const isTable = item.name?.toLowerCase().endsWith('.csv') || (() => { const t = tabs.find((x) => x.name === item.name); return t?.view === 'table' })()
                     if (isPrompt) return <Sparkles size={14} className="text-purple-500" />
+                    if (isWorkflow) return <FileCode size={14} className="text-purple-500" />
                     if (isTable) return <TableGlyph size={14} />
                     return <FileText size={14} className="text-blue-500" />
                   })()
