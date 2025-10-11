@@ -7,19 +7,6 @@ description: Analyzes sentiment and returns structured JSON output (works with p
 use_cases: ["Customer feedback", "Review analysis", "Social media monitoring"]
 ---
 nodes:
-  - id: prepare
-    type: func
-    expr: |
-      // For CSV mode, combine all row values into text
-      // If row values are empty, use chunk as fallback
-      // For plain text mode, use chunk as-is
-      let text = chunk
-      if (row) {
-        const rowText = Object.values(row).filter(v => v && String(v).trim()).join(' ')
-        text = rowText || chunk
-      }
-      return { text: text }
-
   - id: analyze
     type: prompt
     prompt: |
@@ -28,7 +15,7 @@ nodes:
       - score: a number between 0 and 1 (0=very negative, 1=very positive)
       - reason: brief explanation
 
-      {{ text }}
+      {{ chunk }}
     output: sentiment_result
     expect: json
     append_chunk: false
