@@ -738,6 +738,26 @@ function transform(input, context) {
     setSaveTabFolder("Default")
   }
 
+  // Save all unsaved tabs to Default folder
+  const handleSaveAllTabs = () => {
+    const unsavedTabs = tabs.filter((t) => t.isOpen !== false && !isTabInExplorer(t.id))
+
+    if (unsavedTabs.length === 0) {
+      return
+    }
+
+    unsavedTabs.forEach((tab) => {
+      addFileToFolder(tab.id, tab.name, "Default")
+    })
+
+    // Update all tabs to remember their folder path
+    setTabs((prev) =>
+      prev.map((t) =>
+        unsavedTabs.some((ut) => ut.id === t.id) ? { ...t, folderPath: "Default" } : t
+      )
+    )
+  }
+
   const moveFileToFolder = (tabId: string, targetFolderPath: string) => {
     const tab = tabs.find((t) => t.id === tabId)
     if (!tab) return
@@ -1527,48 +1547,74 @@ function transform(input, context) {
     return items
   }, [folderStructure, tabs])
 
-  const loadWorkflows = useCallback(async () => {
-    try {
-      // Load built-in workflows
-      const builtIn = await fetchBuiltInWorkflows()
-      const builtInWorkflows: Workflow[] = builtIn.map((w, idx) => {
-        const { metadata, body } = parseWorkflowFile(w.content)
-        return {
-          id: `builtin-${idx}-${metadata.name.replace(/\s+/g, '-').toLowerCase()}`,
-          name: `${metadata.name}.workflow`,
-          content: w.content,
-          isBuiltIn: true,
-          metadata
-        }
-      })
+  // Load built-in workflows only once on mount
+  useEffect(() => {
+    let mounted = true
+    const loadBuiltInWorkflows = async () => {
+      try {
+        const builtIn = await fetchBuiltInWorkflows()
+        if (!mounted) return
 
-      // Load custom workflows from tabs
-      const customWorkflows: Workflow[] = []
-      const workflowTabs = tabs.filter(t =>
-        t.name?.toLowerCase().endsWith('.workflow')
-      )
-
-      for (const tab of workflowTabs) {
-        try {
-          const { metadata } = parseWorkflowFile(tab.content)
-          customWorkflows.push({
-            id: tab.id,
-            name: tab.name,
-            content: tab.content,
-            folderPath: tab.folderPath,
-            isBuiltIn: false,
+        const builtInWorkflows: Workflow[] = builtIn.map((w, idx) => {
+          const { metadata, body } = parseWorkflowFile(w.content)
+          return {
+            id: `builtin-${idx}-${metadata.name.replace(/\s+/g, '-').toLowerCase()}`,
+            name: `${metadata.name}.workflow`,
+            content: w.content,
+            isBuiltIn: true,
             metadata
-          })
-        } catch (err) {
-          console.error(`Failed to parse workflow ${tab.name}:`, err)
-        }
-      }
+          }
+        })
 
-      setAvailableWorkflows([...builtInWorkflows, ...customWorkflows])
-    } catch (err) {
-      console.error('Failed to load workflows:', err)
+        // Store built-in workflows separately to avoid re-fetching
+        setAvailableWorkflows(prev => {
+          const customWorkflows = prev.filter(w => !w.isBuiltIn)
+          return [...builtInWorkflows, ...customWorkflows]
+        })
+      } catch (err) {
+        console.error('Failed to load built-in workflows:', err)
+      }
     }
+    loadBuiltInWorkflows()
+    return () => { mounted = false }
+  }, [])
+
+  // Update custom workflows from tabs (only when workflow tab IDs/names change, not content)
+  const workflowTabsRef = useRef(tabs)
+  workflowTabsRef.current = tabs
+
+  const workflowTabIdentifiers = useMemo(() => {
+    return tabs
+      .filter(t => t.name?.toLowerCase().endsWith('.workflow'))
+      .map(t => `${t.id}:${t.name}`)
+      .join(',')
   }, [tabs])
+
+  useEffect(() => {
+    const customWorkflows: Workflow[] = []
+    const workflowTabs = workflowTabsRef.current.filter(t => t.name?.toLowerCase().endsWith('.workflow'))
+
+    for (const tab of workflowTabs) {
+      try {
+        const { metadata } = parseWorkflowFile(tab.content)
+        customWorkflows.push({
+          id: tab.id,
+          name: tab.name,
+          content: tab.content,
+          folderPath: tab.folderPath,
+          isBuiltIn: false,
+          metadata
+        })
+      } catch (err) {
+        console.error(`Failed to parse workflow ${tab.name}:`, err)
+      }
+    }
+
+    setAvailableWorkflows(prev => {
+      const builtInWorkflows = prev.filter(w => w.isBuiltIn)
+      return [...builtInWorkflows, ...customWorkflows]
+    })
+  }, [workflowTabIdentifiers])
 
   const handleEditorDidMount = useCallback(
     (editor: any, monaco: any) => {
@@ -2955,6 +3001,16 @@ function transform(input, context) {
           <button onClick={addTab} className="p-2 hover:bg-muted/40 rounded" title="Add new tab">
             <Plus size={16} />
           </button>
+          {tabs.filter((t) => t.isOpen !== false && !isTabInExplorer(t.id)).length > 0 && (
+            <button
+              onClick={handleSaveAllTabs}
+              className="px-3 py-1.5 text-xs font-medium bg-blue-600 text-white rounded hover:bg-blue-700 flex items-center gap-1.5"
+              title="Save all unsaved tabs to Default folder"
+            >
+              <Save size={12} />
+              Save all
+            </button>
+          )}
         </div>
 
         <div className="ml-auto flex items-center gap-2">
