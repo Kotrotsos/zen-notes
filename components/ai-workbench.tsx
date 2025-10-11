@@ -2,7 +2,7 @@
 
 import React, { useState, useRef, useEffect, useMemo } from "react"
 import { Editor } from "@monaco-editor/react"
-import { X, Play, Square, ChevronDown, ChevronUp, Zap, FilePlus, FileText, Download } from "lucide-react"
+import { X, Play, Square, ChevronDown, ChevronUp, Zap, FilePlus, FileText, Download, BookOpen, Save, Maximize2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
@@ -14,7 +14,6 @@ import WorkflowDropdown from '@/components/workflow-dropdown'
 import WorkflowBrowser from '@/components/workflow-browser'
 import { Workflow, WorkflowMetadata } from '@/lib/workflow-types'
 import { parseWorkflowFile, buildWorkflowFile } from '@/lib/workflow-service'
-import { BookOpen, Save, Maximize2, FilePlus } from 'lucide-react'
 
 const NEW_WORKFLOW_TEMPLATE = `nodes:
   - id: process
