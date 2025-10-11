@@ -67,7 +67,7 @@ interface ChunkResult {
   error?: string
 }
 
-export default function AIWorkbench({ activeTabContent, activeTabName, onClose, onCreateNewTab, onAppendToTab, availablePrompts = [], onSavePrompt, selectedPromptId, onActivityChange }: AIWorkbenchProps) {
+export default function AIWorkbench({ activeTabContent, activeTabName, onClose, onCreateNewTab, onAppendToTab, availablePrompts = [], onSavePrompt, selectedPromptId, onActivityChange, availableWorkflows, onSaveWorkflow, onDeleteWorkflow, selectedWorkflowId }: AIWorkbenchProps) {
   // Settings
   const [model, setModel] = useState("gpt-4.1")
   const [prompt, setPrompt] = useState("Summarize the following text:")
@@ -1198,6 +1198,32 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
             </>
           ) : (
             <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <WorkflowDropdown
+                  workflows={availableWorkflows || []}
+                  selectedId={currentWorkflowId}
+                  favorites={workflowFavorites}
+                  recent={workflowRecent}
+                  onSelect={handleLoadWorkflow}
+                  onToggleFavorite={handleToggleWorkflowFavorite}
+                />
+                <Button variant="secondary" size="sm" onClick={() => setShowWorkflowBrowser(true)}>
+                  <BookOpen size={14} className="mr-1" />
+                  Browse
+                </Button>
+                <Button variant="secondary" size="sm" onClick={handleOpenSaveDialog}>
+                  <Save size={14} className="mr-1" />
+                  Save
+                </Button>
+              </div>
+
+              {isWorkflowModified && (
+                <div className="text-xs text-amber-600 bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 rounded px-2 py-1">
+                  Unsaved changes
+                  {currentWorkflowId && ` (modified from: ${availableWorkflows?.find(w => w.id === currentWorkflowId)?.name})`}
+                </div>
+              )}
+
               <p className="text-xs text-muted-foreground">
                 Define a workflow using YAML. Each chunk or row flows through the nodes in order. Available node types:
                 <code className="mx-1">func</code>, <code className="mx-1">prompt</code>, and <code className="mx-1">print</code>.
@@ -1216,6 +1242,118 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
                   {workflowError}
                 </div>
               )}
+
+              {showWorkflowSave && (
+                <div className="border border-border rounded p-3 space-y-3 bg-muted/30">
+                  <div className="flex items-center justify-between">
+                    <div className="text-sm font-semibold">Save Workflow</div>
+                    <button className="text-xs hover:text-primary" onClick={() => setShowWorkflowSave(false)}>Close</button>
+                  </div>
+                  <div className="space-y-2">
+                    <div>
+                      <Label className="text-xs">Name</Label>
+                      <Input
+                        className="h-8 text-xs"
+                        placeholder="My workflow.workflow"
+                        value={workflowSaveName}
+                        onChange={(e) => setWorkflowSaveName(e.target.value)}
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <Label className="text-xs">Category</Label>
+                        <Select value={workflowSaveCategory} onValueChange={setWorkflowSaveCategory}>
+                          <SelectTrigger className="h-8 text-xs">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="Content Generation">Content Generation</SelectItem>
+                            <SelectItem value="Data Processing">Data Processing</SelectItem>
+                            <SelectItem value="Analysis">Analysis</SelectItem>
+                            <SelectItem value="Multi-step Workflows">Multi-step Workflows</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div>
+                        <Label className="text-xs">Difficulty</Label>
+                        <Select value={workflowSaveDifficulty} onValueChange={(v: any) => setWorkflowSaveDifficulty(v)}>
+                          <SelectTrigger className="h-8 text-xs">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="beginner">Beginner</SelectItem>
+                            <SelectItem value="intermediate">Intermediate</SelectItem>
+                            <SelectItem value="advanced">Advanced</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                    <div>
+                      <Label className="text-xs">Description</Label>
+                      <Textarea
+                        className="h-16 text-xs"
+                        placeholder="Brief description of what this workflow does"
+                        value={workflowSaveDescription}
+                        onChange={(e) => setWorkflowSaveDescription(e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Tags (comma-separated)</Label>
+                      <Input
+                        className="h-8 text-xs"
+                        placeholder="summarization, analysis, etc."
+                        value={workflowSaveTags}
+                        onChange={(e) => setWorkflowSaveTags(e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Use Cases (comma-separated)</Label>
+                      <Input
+                        className="h-8 text-xs"
+                        placeholder="Meeting notes, Report generation, etc."
+                        value={workflowSaveUseCases}
+                        onChange={(e) => setWorkflowSaveUseCases(e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Folder</Label>
+                      <Input
+                        className="h-8 text-xs"
+                        placeholder="Workflows"
+                        value={workflowSaveFolder}
+                        onChange={(e) => setWorkflowSaveFolder(e.target.value)}
+                      />
+                    </div>
+                    {availableWorkflows?.some(w => {
+                      const targetName = workflowSaveName?.toLowerCase().endsWith('.workflow')
+                        ? workflowSaveName
+                        : `${workflowSaveName}.workflow`
+                      return w.name === targetName
+                    }) && (
+                      <label className="flex items-center gap-2 text-xs text-destructive">
+                        <input type="checkbox" checked={workflowOverwrite} onChange={(e) => setWorkflowOverwrite(e.target.checked)} />
+                        A workflow with this name exists. Overwrite?
+                      </label>
+                    )}
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        onClick={handleSaveWorkflow}
+                        disabled={!workflowSaveName.trim() || (availableWorkflows?.some(w => {
+                          const targetName = workflowSaveName?.toLowerCase().endsWith('.workflow')
+                            ? workflowSaveName
+                            : `${workflowSaveName}.workflow`
+                          return w.name === targetName
+                        }) && !workflowOverwrite)}
+                      >
+                        Save
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => setShowWorkflowSave(false)}>Cancel</Button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div className="flex items-center gap-2">
                 <Button size="sm" onClick={handleAdvancedRun} disabled={isAdvancedProcessing}>
                   {isAdvancedProcessing ? 'Running…' : 'Run Workflow'}
@@ -1362,6 +1500,16 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
           )}
         </div>
       </div>
+
+      {showWorkflowBrowser && (
+        <WorkflowBrowser
+          workflows={availableWorkflows || []}
+          favorites={workflowFavorites}
+          onLoad={handleLoadWorkflow}
+          onToggleFavorite={handleToggleWorkflowFavorite}
+          onClose={() => setShowWorkflowBrowser(false)}
+        />
+      )}
     </div>
   )
 }
