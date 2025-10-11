@@ -14,7 +14,24 @@ import WorkflowDropdown from '@/components/workflow-dropdown'
 import WorkflowBrowser from '@/components/workflow-browser'
 import { Workflow, WorkflowMetadata } from '@/lib/workflow-types'
 import { parseWorkflowFile, buildWorkflowFile } from '@/lib/workflow-service'
-import { BookOpen, Save } from 'lucide-react'
+import { BookOpen, Save, Maximize2, FilePlus } from 'lucide-react'
+
+const NEW_WORKFLOW_TEMPLATE = `nodes:
+  - id: process
+    type: prompt
+    prompt: |
+      Process the following text:
+
+      {{ chunk }}
+    model: gpt-4.1
+    temperature: 0.7
+    expect: text
+    output: result
+
+  - id: log
+    type: print
+    message: "Result: {{ result }}"
+`
 
 const DEFAULT_WORKFLOW_SCRIPT = `# Advanced workflow example
 nodes:
@@ -125,6 +142,7 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
   const [workflowSaveDescription, setWorkflowSaveDescription] = useState('')
   const [workflowSaveUseCases, setWorkflowSaveUseCases] = useState('')
   const [workflowOverwrite, setWorkflowOverwrite] = useState(false)
+  const [isEditorExpanded, setIsEditorExpanded] = useState(false)
   const promptVars = useMemo(() => {
     const vars = new Set<string>()
     if (!prompt) return vars
@@ -892,6 +910,18 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
     setShowWorkflowSave(true)
   }
 
+  const handleNewWorkflow = () => {
+    // Check for unsaved changes
+    if (isWorkflowModified) {
+      const confirm = window.confirm('You have unsaved changes. Create new workflow anyway?')
+      if (!confirm) return
+    }
+
+    setWorkflowScript(NEW_WORKFLOW_TEMPLATE)
+    setCurrentWorkflowId(null)
+    setIsWorkflowModified(false)
+  }
+
   return (
     <div className={`h-full bg-background border-l flex flex-col ${isDragging ? 'select-none' : ''}`}>
       {/* Header */}
@@ -1198,7 +1228,7 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
             </>
           ) : (
             <div className="space-y-3">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <WorkflowDropdown
                   workflows={availableWorkflows || []}
                   selectedId={currentWorkflowId}
@@ -1211,9 +1241,13 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
                   <BookOpen size={14} className="mr-1" />
                   Browse
                 </Button>
+                <Button variant="secondary" size="sm" onClick={handleNewWorkflow}>
+                  <FilePlus size={14} className="mr-1" />
+                  New
+                </Button>
                 <Button variant="secondary" size="sm" onClick={handleOpenSaveDialog}>
                   <Save size={14} className="mr-1" />
-                  Save
+                  Save to Project
                 </Button>
               </div>
 
@@ -1224,13 +1258,23 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
                 </div>
               )}
 
-              <p className="text-xs text-muted-foreground">
-                Define a workflow using YAML. Each chunk or row flows through the nodes in order. Available node types:
-                <code className="mx-1">func</code>, <code className="mx-1">prompt</code>, and <code className="mx-1">print</code>.
-              </p>
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-muted-foreground">
+                  Define a workflow using YAML. Each chunk or row flows through the nodes in order. Available node types:
+                  <code className="mx-1">func</code>, <code className="mx-1">prompt</code>, and <code className="mx-1">print</code>.
+                </p>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setIsEditorExpanded(!isEditorExpanded)}
+                  className="shrink-0"
+                >
+                  <Maximize2 size={14} />
+                </Button>
+              </div>
               <div className="border border-border rounded overflow-hidden">
                 <Editor
-                  height="280px"
+                  height={isEditorExpanded ? "500px" : "280px"}
                   language="yaml"
                   value={workflowScript}
                   onChange={(value) => setWorkflowScript(value ?? "")}
