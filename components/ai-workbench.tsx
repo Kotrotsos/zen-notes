@@ -1399,7 +1399,7 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
 
               <div className="flex items-center gap-2">
                 <Button size="sm" onClick={handleAdvancedRun} disabled={isAdvancedProcessing}>
-                  {isAdvancedProcessing ? 'Running…' : 'Run Workflow'}
+                  {isAdvancedProcessing ? 'Running…' : `Run workflow on ${memoChunks.length} chunk(s)`}
                 </Button>
                 <Button size="sm" variant="secondary" onClick={() => setWorkflowScript(DEFAULT_WORKFLOW_SCRIPT)}>
                   Reset Example
