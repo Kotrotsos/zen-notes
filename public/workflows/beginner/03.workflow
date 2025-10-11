@@ -11,10 +11,12 @@ nodes:
     type: func
     expr: |
       // For CSV mode, combine all row values into text
+      // If row values are empty, use chunk as fallback
       // For plain text mode, use chunk as-is
       let text = chunk
       if (row) {
-        text = Object.values(row).filter(v => v && String(v).trim()).join(' ')
+        const rowText = Object.values(row).filter(v => v && String(v).trim()).join(' ')
+        text = rowText || chunk
       }
       return { text: text }
 
