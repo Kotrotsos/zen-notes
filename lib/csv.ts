@@ -103,6 +103,10 @@ export function isValidCsv(text: string): boolean {
     const maxCount = Math.max(...delimCounts)
     if (maxCount - minCount > 1) return false
 
+    // At least 80% of lines should have the delimiter
+    const linesWithDelimiter = delimCounts.filter(c => c > 0).length
+    if (linesWithDelimiter < lines.length * 0.8) return false
+
     return true
   } catch {
     return false
