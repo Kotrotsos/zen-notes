@@ -926,13 +926,25 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
   }
 
   const handleWorkflowExport = () => {
+    // Helper to get field value or full context
+    const getExportValue = (context: Record<string, any>) => {
+      if (showSingleField && singleFieldName) {
+        const value = context[singleFieldName]
+        if (value === undefined) {
+          return `Field "${singleFieldName}" not found`
+        }
+        return typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value)
+      }
+      return JSON.stringify(context, null, 2)
+    }
+
     if (workflowExportAction === "new-tab") {
       const content = workflowIncludeHeaders
         ? workflowResults
-            .map((r) => `## Chunk ${r.index + 1}\n\n${JSON.stringify(r.context, null, 2)}`)
+            .map((r) => `## Chunk ${r.index + 1}\n\n${getExportValue(r.context)}`)
             .join('\n\n---\n\n')
         : workflowResults
-            .map((r) => JSON.stringify(r.context, null, 2))
+            .map((r) => getExportValue(r.context))
             .join('\n\n')
 
       if (onCreateNewTab) {
@@ -941,46 +953,70 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
     } else if (workflowExportAction === "append") {
       const content = workflowIncludeHeaders
         ? workflowResults
-            .map((r) => `\n\n## Workflow Result ${r.index + 1}\n\n${JSON.stringify(r.context, null, 2)}`)
+            .map((r) => `\n\n## Workflow Result ${r.index + 1}\n\n${getExportValue(r.context)}`)
             .join('\n\n')
         : workflowResults
-            .map((r) => `\n\n${JSON.stringify(r.context, null, 2)}`)
+            .map((r) => `\n\n${getExportValue(r.context)}`)
             .join('\n\n')
 
       if (onAppendToTab) {
         onAppendToTab(content)
       }
     } else if (workflowExportAction === "csv") {
-      // Extract all unique keys from all workflow results
-      const allKeys = new Set<string>()
-      workflowResults.forEach(r => {
-        Object.keys(r.context).forEach(key => allKeys.add(key))
-      })
-      const headers = ['Chunk #', ...Array.from(allKeys).sort()]
-
-      const csvRows = [
-        headers,
-        ...workflowResults.map((r) => {
-          const row = [String(r.index + 1)]
-          Array.from(allKeys).sort().forEach(key => {
-            const value = r.context[key]
+      // If single field mode, export only that field
+      if (showSingleField && singleFieldName) {
+        const headers = ['Chunk #', singleFieldName]
+        const csvRows = [
+          headers,
+          ...workflowResults.map((r) => {
+            const value = r.context[singleFieldName]
             const stringValue = value == null ? '' : (typeof value === 'object' ? JSON.stringify(value) : String(value))
-            row.push(stringValue.replace(/"/g, '""'))
+            return [String(r.index + 1), stringValue.replace(/"/g, '""')]
           })
-          return row
+        ]
+
+        const csvContent = csvRows
+          .map(row => row.map(cell => `"${cell}"`).join(','))
+          .join('\n')
+
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+        const link = document.createElement('a')
+        link.href = URL.createObjectURL(blob)
+        link.download = `workflow-results-${Date.now()}.csv`
+        link.click()
+        URL.revokeObjectURL(link.href)
+      } else {
+        // Extract all unique keys from all workflow results
+        const allKeys = new Set<string>()
+        workflowResults.forEach(r => {
+          Object.keys(r.context).forEach(key => allKeys.add(key))
         })
-      ]
+        const headers = ['Chunk #', ...Array.from(allKeys).sort()]
 
-      const csvContent = csvRows
-        .map(row => row.map(cell => `"${cell}"`).join(','))
-        .join('\n')
+        const csvRows = [
+          headers,
+          ...workflowResults.map((r) => {
+            const row = [String(r.index + 1)]
+            Array.from(allKeys).sort().forEach(key => {
+              const value = r.context[key]
+              const stringValue = value == null ? '' : (typeof value === 'object' ? JSON.stringify(value) : String(value))
+              row.push(stringValue.replace(/"/g, '""'))
+            })
+            return row
+          })
+        ]
 
-      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
-      const link = document.createElement('a')
-      link.href = URL.createObjectURL(blob)
-      link.download = `workflow-results-${Date.now()}.csv`
-      link.click()
-      URL.revokeObjectURL(link.href)
+        const csvContent = csvRows
+          .map(row => row.map(cell => `"${cell}"`).join(','))
+          .join('\n')
+
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+        const link = document.createElement('a')
+        link.href = URL.createObjectURL(blob)
+        link.download = `workflow-results-${Date.now()}.csv`
+        link.click()
+        URL.revokeObjectURL(link.href)
+      }
     }
   }
 
