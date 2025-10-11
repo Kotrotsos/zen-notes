@@ -18,6 +18,7 @@ nodes:
         const rowText = Object.values(row).filter(v => v && String(v).trim()).join(' ')
         text = rowText || chunk
       }
+      helpers.log(`### PREPARED TEXT: ${text}`)
       return { text: text }
 
   - id: analyze
@@ -34,6 +35,14 @@ nodes:
     model: gpt-4.1
     temperature: 0.3
     max_tokens: 200
+
+  - id: log_prompt
+    type: print
+    message: "### PROMPT SENT: Analyze the sentiment of the following text and return a JSON object with: sentiment, score, reason. Text: {{ text }}"
+
+  - id: log_response
+    type: print
+    message: "### RESPONSE: {{ sentiment_result }}"
 
   - id: log
     type: print
