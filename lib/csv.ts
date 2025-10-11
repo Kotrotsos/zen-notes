@@ -74,8 +74,36 @@ export function stringifyCsv(headers: string[], rows: CsvRow[], delimiter: Delim
 
 export function isValidCsv(text: string): boolean {
   try {
-    const { headers } = parseCsv(text)
-    return headers.length > 1
+    const { headers, rows, delimiter } = parseCsv(text)
+
+    // Need at least 2 columns
+    if (headers.length < 2) return false
+
+    // Need at least 2 data rows (not counting header)
+    if (rows.length < 2) return false
+
+    // Check if delimiter appears consistently across rows
+    const lines = text.split(/\r?\n/).filter(l => l.trim())
+    if (lines.length < 3) return false // Need at least header + 2 data rows
+
+    // Count delimiter occurrences in each line
+    const delimCounts = lines.map(line => {
+      let count = 0
+      let inQuotes = false
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i]
+        if (ch === '"') inQuotes = !inQuotes
+        else if (!inQuotes && ch === delimiter) count++
+      }
+      return count
+    })
+
+    // All rows should have similar delimiter counts (within 1 of each other)
+    const minCount = Math.min(...delimCounts)
+    const maxCount = Math.max(...delimCounts)
+    if (maxCount - minCount > 1) return false
+
+    return true
   } catch {
     return false
   }
