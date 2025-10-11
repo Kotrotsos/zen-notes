@@ -49,7 +49,7 @@ import AIWorkbench from "@/components/ai-workbench"
 import { parseCsv, stringifyCsv, isValidCsv } from "@/lib/csv"
 import { Workflow, WorkflowMetadata } from '@/lib/workflow-types'
 import { fetchBuiltInWorkflows, parseWorkflowFile } from '@/lib/workflow-service'
-import { FileCode } from 'lucide-react'
+import { FileCode, Save } from 'lucide-react'
 
 const TableGlyph = ({ size = 16 }: { size?: number }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -243,6 +243,9 @@ export default function ZenNotes() {
   const [isLoaded, setIsLoaded] = useState(false)
   const [editingTabId, setEditingTabId] = useState<string | null>(null)
   const [editingName, setEditingName] = useState("")
+  const [showSaveTabDialog, setShowSaveTabDialog] = useState(false)
+  const [saveTabId, setSaveTabId] = useState<string | null>(null)
+  const [saveTabFolder, setSaveTabFolder] = useState("Default")
   const [showMarkdownPreview, setShowMarkdownPreview] = useState(
     () => (typeof initialUI.showMarkdownPreview === "boolean" ? initialUI.showMarkdownPreview : false),
   )
@@ -617,6 +620,24 @@ function transform(input, context) {
     return currentFolder || null
   }
 
+  // Check if a tab exists in the folder structure (is "saved")
+  const isTabInExplorer = (tabId: string): boolean => {
+    const searchInFolder = (items: (FileItem | FolderItem)[]): boolean => {
+      for (const item of items) {
+        if (item.type === "file" && item.tabId === tabId) {
+          return true
+        }
+        if (item.type === "folder") {
+          if (searchInFolder(item.children)) {
+            return true
+          }
+        }
+      }
+      return false
+    }
+    return searchInFolder(folderStructure)
+  }
+
   const createFolderPath = (path: string, folders: FolderItem[]): FolderItem[] => {
     if (path === "" || path === "Default") return folders
 
@@ -690,6 +711,31 @@ function transform(input, context) {
 
       return updatedStructure
     })
+  }
+
+  // Open save dialog for an unsaved tab
+  const openSaveTabDialog = (tabId: string) => {
+    setSaveTabId(tabId)
+    setSaveTabFolder("Default")
+    setShowSaveTabDialog(true)
+  }
+
+  // Save a tab to the explorer
+  const handleSaveTab = () => {
+    if (!saveTabId) return
+    const tab = tabs.find((t) => t.id === saveTabId)
+    if (!tab) return
+
+    // Add to folder structure
+    addFileToFolder(saveTabId, tab.name, saveTabFolder)
+
+    // Update tab to remember its folder path
+    setTabs((prev) => prev.map((t) => (t.id === saveTabId ? { ...t, folderPath: saveTabFolder } : t)))
+
+    // Close dialog
+    setShowSaveTabDialog(false)
+    setSaveTabId(null)
+    setSaveTabFolder("Default")
   }
 
   const moveFileToFolder = (tabId: string, targetFolderPath: string) => {
@@ -2691,6 +2737,48 @@ function transform(input, context) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Save Tab Dialog */}
+      <Dialog open={showSaveTabDialog} onOpenChange={(open) => !open && setShowSaveTabDialog(false)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Save Tab to Explorer</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-xs text-muted-foreground">
+              Add this tab to the Explorer sidebar so you can find it later.
+            </p>
+            <div>
+              <label className="text-xs font-medium block mb-1">Folder Path</label>
+              <input
+                type="text"
+                value={saveTabFolder}
+                onChange={(e) => setSaveTabFolder(e.target.value)}
+                placeholder="Default"
+                className="w-full px-3 py-1.5 text-xs border border-border rounded"
+              />
+              <p className="text-[10px] text-muted-foreground mt-1">
+                Use folder names separated by "/" (e.g., "Workflows" or "Projects/Research")
+              </p>
+            </div>
+          </div>
+          <DialogFooter>
+            <button
+              className="px-3 py-1.5 text-xs border rounded"
+              onClick={() => setShowSaveTabDialog(false)}
+            >
+              Cancel
+            </button>
+            <button
+              className="px-3 py-1.5 text-xs border rounded bg-blue-600 text-white hover:bg-blue-700"
+              onClick={handleSaveTab}
+            >
+              Save
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Explorer trigger button - only show when not pinned and not visible */}
       {!showFileExplorer && !pinnedExplorer && (
         <button
@@ -2838,6 +2926,18 @@ function transform(input, context) {
                 <span className="text-sm font-mono select-none" onDoubleClick={() => startEditingTab(tab.id, tab.name)}>
                   {tab.name}
                 </span>
+              )}
+              {!isTabInExplorer(tab.id) && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    openSaveTabDialog(tab.id)
+                  }}
+                  className="hover:bg-blue-100 rounded p-0.5 text-blue-600"
+                  title="Save to Explorer"
+                >
+                  <Save size={12} />
+                </button>
               )}
               {tabs.filter((t) => t.isOpen !== false).length > 1 && (
                 <button
