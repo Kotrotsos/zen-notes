@@ -9,6 +9,7 @@ export async function POST(req: Request) {
       temperature,
       maxTokens,
       includeChunk,
+      system,
     }: {
       prompt: string
       chunk: string
@@ -16,6 +17,7 @@ export async function POST(req: Request) {
       temperature?: number
       maxTokens?: number
       includeChunk?: boolean
+      system?: string
     } = await req.json()
 
     console.log('AI Workbench API called:', {
@@ -38,15 +40,17 @@ export async function POST(req: Request) {
     }
 
     // Construct the full prompt, optionally appending the chunk
-    const fullPrompt = includeChunk === false ? prompt : `${prompt}\n\n${chunk || ''}`
+    const fullPrompt = includeChunk === false || !chunk ? prompt : `${prompt}\n\n${chunk}`
 
     // Build the input for the Responses API
-    const input = [
-      {
-        role: 'user',
-        content: [{ type: 'input_text' as const, text: fullPrompt }],
-      },
-    ]
+    const input: Array<{ role: string; content: Array<{ type: 'input_text'; text: string }> }> = []
+    if (system) {
+      input.push({ role: 'system', content: [{ type: 'input_text', text: system }] })
+    }
+    input.push({
+      role: 'user',
+      content: [{ type: 'input_text' as const, text: fullPrompt }],
+    })
 
     const requestBody = {
       model: model || 'gpt-4.1',

@@ -1592,8 +1592,8 @@ const parseWorkflowScript = (script: string): { nodes: WorkflowNode[] } => {
     if (trimmed.startsWith('- ')) {
       flushMultiline()
       const rest = trimmed.slice(2)
-      currentNode = {}
-      nodes.push(currentNode)
+      currentNode = { type: '' } as WorkflowNode
+      nodes.push(currentNode as WorkflowNode)
       if (rest.includes(':')) {
         const [key, ...valueParts] = rest.split(':')
         const value = valueParts.join(':').trim()

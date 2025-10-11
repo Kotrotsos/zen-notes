@@ -31,7 +31,7 @@ export function parseWorkflowFile(content: string): ParsedWorkflow {
         value = value
           .slice(1, -1)
           .split(',')
-          .map(v => v.trim().replace(/^["']|["']$/g, ''))
+          .map((v: string) => v.trim().replace(/^["']|["']$/g, ''))
           .filter(Boolean)
       }
 
