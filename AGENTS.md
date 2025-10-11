@@ -67,6 +67,7 @@ Note: `package-lock.json` is present; use npm to avoid lockfile drift. Builds cu
 - Deleting files/folders prompts a shadcn Dialog confirmation with "Always delete right away" option (persisted in settings). Closing a tab merely hides it (`tab.isOpen`), preserving Explorer entries.
 - Spinner text fun-word list stored in `app/page.tsx`; tweak there to adjust flavor.
 - Save button: Tabs not in the explorer show a blue Save icon next to their name. Clicking opens a dialog to save the tab to any folder path (auto-creates folders if needed). `isTabInExplorer()` helper checks if a tab exists in folder structure.
+- Save all button: Appears in tab bar when unsaved tabs exist. Saves all unsaved tabs to Default folder with one click.
 - Workflow Cookbook: Advanced mode now includes a comprehensive workflow management system:
   - **Built-in Examples**: 11 example workflows (4 beginner, 4 intermediate, 3 advanced) shipped in `/public/workflows/` organized by difficulty.
   - **Categories**: Content Generation, Data Processing, Analysis, Multi-step Workflows.
