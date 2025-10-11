@@ -29,9 +29,10 @@ nodes:
       - score: a number between 0 and 1 (0=very negative, 1=very positive)
       - reason: brief explanation
 
-      Text: {{ text }}
+      {{ text }}
     output: sentiment_result
     expect: json
+    append_chunk: false
     model: gpt-4.1
     temperature: 0.3
     max_tokens: 200
