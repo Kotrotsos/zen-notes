@@ -245,7 +245,6 @@ export default function ZenNotes() {
   const [editingName, setEditingName] = useState("")
   const [showSaveTabDialog, setShowSaveTabDialog] = useState(false)
   const [saveTabId, setSaveTabId] = useState<string | null>(null)
-  const [saveTabFolder, setSaveTabFolder] = useState("Default")
   const [showMarkdownPreview, setShowMarkdownPreview] = useState(
     () => (typeof initialUI.showMarkdownPreview === "boolean" ? initialUI.showMarkdownPreview : false),
   )
@@ -716,26 +715,24 @@ function transform(input, context) {
   // Open save dialog for an unsaved tab
   const openSaveTabDialog = (tabId: string) => {
     setSaveTabId(tabId)
-    setSaveTabFolder("Default")
     setShowSaveTabDialog(true)
   }
 
-  // Save a tab to the explorer
+  // Save a tab to the explorer (always saves to Default folder)
   const handleSaveTab = () => {
     if (!saveTabId) return
     const tab = tabs.find((t) => t.id === saveTabId)
     if (!tab) return
 
-    // Add to folder structure
-    addFileToFolder(saveTabId, tab.name, saveTabFolder)
+    // Add to folder structure (always use Default)
+    addFileToFolder(saveTabId, tab.name, "Default")
 
     // Update tab to remember its folder path
-    setTabs((prev) => prev.map((t) => (t.id === saveTabId ? { ...t, folderPath: saveTabFolder } : t)))
+    setTabs((prev) => prev.map((t) => (t.id === saveTabId ? { ...t, folderPath: "Default" } : t)))
 
     // Close dialog
     setShowSaveTabDialog(false)
     setSaveTabId(null)
-    setSaveTabFolder("Default")
   }
 
   // Save all unsaved tabs to Default folder
@@ -2023,10 +2020,6 @@ function transform(input, context) {
     showAtReferenceRef.current = showAtReference
   }, [showAtReference])
 
-  useEffect(() => {
-    loadWorkflows()
-  }, [loadWorkflows])
-
   const autoSave = (data: AppData) => {
     if (autoSaveTimeoutRef.current) {
       clearTimeout(autoSaveTimeoutRef.current)
@@ -2792,21 +2785,8 @@ function transform(input, context) {
           </DialogHeader>
           <div className="space-y-3">
             <p className="text-xs text-muted-foreground">
-              Add this tab to the Explorer sidebar so you can find it later.
+              This tab will be saved to the Default folder in Explorer.
             </p>
-            <div>
-              <label className="text-xs font-medium block mb-1">Folder Path</label>
-              <input
-                type="text"
-                value={saveTabFolder}
-                onChange={(e) => setSaveTabFolder(e.target.value)}
-                placeholder="Default"
-                className="w-full px-3 py-1.5 text-xs border border-border rounded"
-              />
-              <p className="text-[10px] text-muted-foreground mt-1">
-                Use folder names separated by "/" (e.g., "Workflows" or "Projects/Research")
-              </p>
-            </div>
           </div>
           <DialogFooter>
             <button
