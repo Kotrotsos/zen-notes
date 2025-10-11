@@ -142,6 +142,8 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
   const [workflowSaveUseCases, setWorkflowSaveUseCases] = useState('')
   const [workflowOverwrite, setWorkflowOverwrite] = useState(false)
   const [isEditorExpanded, setIsEditorExpanded] = useState(false)
+  const [workflowExportAction, setWorkflowExportAction] = useState<string>("new-tab")
+  const [workflowIncludeHeaders, setWorkflowIncludeHeaders] = useState(true)
   const promptVars = useMemo(() => {
     const vars = new Set<string>()
     if (!prompt) return vars
@@ -921,6 +923,65 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
     setIsWorkflowModified(false)
   }
 
+  const handleWorkflowExport = () => {
+    if (workflowExportAction === "new-tab") {
+      const content = workflowIncludeHeaders
+        ? workflowResults
+            .map((r) => `## Chunk ${r.index + 1}\n\n${JSON.stringify(r.context, null, 2)}`)
+            .join('\n\n---\n\n')
+        : workflowResults
+            .map((r) => JSON.stringify(r.context, null, 2))
+            .join('\n\n')
+
+      if (onCreateNewTab) {
+        onCreateNewTab(content, `Workflow Results - ${activeTabName || 'Untitled'}`)
+      }
+    } else if (workflowExportAction === "append") {
+      const content = workflowIncludeHeaders
+        ? workflowResults
+            .map((r) => `\n\n## Workflow Result ${r.index + 1}\n\n${JSON.stringify(r.context, null, 2)}`)
+            .join('\n\n')
+        : workflowResults
+            .map((r) => `\n\n${JSON.stringify(r.context, null, 2)}`)
+            .join('\n\n')
+
+      if (onAppendToTab) {
+        onAppendToTab(content)
+      }
+    } else if (workflowExportAction === "csv") {
+      // Extract all unique keys from all workflow results
+      const allKeys = new Set<string>()
+      workflowResults.forEach(r => {
+        Object.keys(r.context).forEach(key => allKeys.add(key))
+      })
+      const headers = ['Chunk #', ...Array.from(allKeys).sort()]
+
+      const csvRows = [
+        headers,
+        ...workflowResults.map((r) => {
+          const row = [String(r.index + 1)]
+          Array.from(allKeys).sort().forEach(key => {
+            const value = r.context[key]
+            const stringValue = value == null ? '' : (typeof value === 'object' ? JSON.stringify(value) : String(value))
+            row.push(stringValue.replace(/"/g, '""'))
+          })
+          return row
+        })
+      ]
+
+      const csvContent = csvRows
+        .map(row => row.map(cell => `"${cell}"`).join(','))
+        .join('\n')
+
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+      const link = document.createElement('a')
+      link.href = URL.createObjectURL(blob)
+      link.download = `workflow-results-${Date.now()}.csv`
+      link.click()
+      URL.revokeObjectURL(link.href)
+    }
+  }
+
   return (
     <div className={`h-full bg-background border-l flex flex-col ${isDragging ? 'select-none' : ''}`}>
       {/* Header */}
@@ -1517,26 +1578,61 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
                 ) : workflowResults.length === 0 ? (
                   <div className="text-xs text-muted-foreground">Run the workflow to see results.</div>
                 ) : (
-                  <table className="w-full text-xs border border-border rounded overflow-hidden">
-                    <thead className="bg-muted/50">
-                      <tr>
-                        <th className="text-left p-2 w-14">Chunk</th>
-                        <th className="text-left p-2">Context</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {workflowResults.map((result) => (
-                        <tr key={result.index} className="border-t border-border/50 align-top">
-                          <td className="p-2 font-mono">{result.index + 1}</td>
-                          <td className="p-2">
-                            <pre className="text-[11px] font-mono whitespace-pre-wrap bg-muted/40 rounded p-2">
-                              {JSON.stringify(result.context, null, 2)}
-                            </pre>
-                          </td>
+                  <>
+                    <table className="w-full text-xs border border-border rounded overflow-hidden">
+                      <thead className="bg-muted/50">
+                        <tr>
+                          <th className="text-left p-2 w-14">Chunk</th>
+                          <th className="text-left p-2">Context</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {workflowResults.map((result) => (
+                          <tr key={result.index} className="border-t border-border/50 align-top">
+                            <td className="p-2 font-mono">{result.index + 1}</td>
+                            <td className="p-2">
+                              <pre className="text-[11px] font-mono whitespace-pre-wrap bg-muted/40 rounded p-2">
+                                {JSON.stringify(result.context, null, 2)}
+                              </pre>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+
+                    <div className="mt-4 pt-4 border-t space-y-2">
+                      <Label className="text-xs">Export Results</Label>
+                      <Select value={workflowExportAction} onValueChange={setWorkflowExportAction}>
+                        <SelectTrigger className="h-8 text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="new-tab">Create New Tab</SelectItem>
+                          <SelectItem value="append">Append to Current Tab</SelectItem>
+                          <SelectItem value="csv">Download as CSV</SelectItem>
+                        </SelectContent>
+                      </Select>
+
+                      {(workflowExportAction === "new-tab" || workflowExportAction === "append") && (
+                        <label className="flex items-center gap-2 text-xs">
+                          <input
+                            type="checkbox"
+                            checked={workflowIncludeHeaders}
+                            onChange={(e) => setWorkflowIncludeHeaders(e.target.checked)}
+                            className="w-3 h-3"
+                          />
+                          <span>Include chunk headers</span>
+                        </label>
+                      )}
+
+                      <Button onClick={handleWorkflowExport} className="w-full" size="sm" variant="secondary">
+                        Export
+                      </Button>
+                      <p className="text-xs text-muted-foreground">
+                        {workflowResults.length} chunk(s) processed
+                      </p>
+                    </div>
+                  </>
                 )}
               </div>
             </div>
