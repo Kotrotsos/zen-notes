@@ -83,7 +83,7 @@ export default function WorkflowDropdown({
             className="fixed inset-0 z-40"
             onClick={() => setIsOpen(false)}
           />
-          <div className="absolute top-full left-0 right-0 mt-1 bg-background border border-border rounded shadow-lg z-50 max-h-[500px] overflow-auto">
+          <div className="absolute top-full left-0 mt-1 bg-background border border-border rounded shadow-lg z-50 max-h-[500px] overflow-auto w-[480px]">
             <div className="p-2 border-b sticky top-0 bg-background">
               <div className="relative">
                 <Search size={14} className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
@@ -111,15 +111,18 @@ export default function WorkflowDropdown({
                       onSelect(workflow.id)
                       setIsOpen(false)
                     }}
-                    className="w-full px-3 py-2 text-left text-xs hover:bg-muted flex items-center gap-2"
+                    className="w-full px-3 py-3 text-left hover:bg-muted flex items-start gap-2 border-b border-border/50 last:border-b-0"
                   >
-                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${getDifficultyColor(workflow.metadata.difficulty)}`}>
+                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 ${getDifficultyColor(workflow.metadata.difficulty)}`}>
                       {workflow.metadata.difficulty[0].toUpperCase()}
                     </span>
-                    <span className="flex-1 truncate">{workflow.name}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs font-medium mb-0.5">{workflow.name}</div>
+                      <div className="text-[10px] text-muted-foreground line-clamp-2">{workflow.metadata.description}</div>
+                    </div>
                     <Star
                       size={12}
-                      className="fill-yellow-400 text-yellow-400"
+                      className="fill-yellow-400 text-yellow-400 shrink-0 mt-0.5"
                       onClick={(e) => {
                         e.stopPropagation()
                         onToggleFavorite(workflow.id)
@@ -143,12 +146,15 @@ export default function WorkflowDropdown({
                       onSelect(workflow.id)
                       setIsOpen(false)
                     }}
-                    className="w-full px-3 py-2 text-left text-xs hover:bg-muted flex items-center gap-2"
+                    className="w-full px-3 py-3 text-left hover:bg-muted flex items-start gap-2 border-b border-border/50 last:border-b-0"
                   >
-                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${getDifficultyColor(workflow.metadata.difficulty)}`}>
+                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 ${getDifficultyColor(workflow.metadata.difficulty)}`}>
                       {workflow.metadata.difficulty[0].toUpperCase()}
                     </span>
-                    <span className="flex-1 truncate">{workflow.name}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs font-medium mb-0.5">{workflow.name}</div>
+                      <div className="text-[10px] text-muted-foreground line-clamp-2">{workflow.metadata.description}</div>
+                    </div>
                   </button>
                 ))}
               </div>
@@ -167,12 +173,15 @@ export default function WorkflowDropdown({
                       onSelect(workflow.id)
                       setIsOpen(false)
                     }}
-                    className="w-full px-3 py-2 text-left text-xs hover:bg-muted flex items-center gap-2"
+                    className="w-full px-3 py-3 text-left hover:bg-muted flex items-start gap-2 border-b border-border/50 last:border-b-0"
                   >
-                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${getDifficultyColor(workflow.metadata.difficulty)}`}>
+                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 ${getDifficultyColor(workflow.metadata.difficulty)}`}>
                       {workflow.metadata.difficulty[0].toUpperCase()}
                     </span>
-                    <span className="flex-1 truncate">{workflow.name}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs font-medium mb-0.5">{workflow.name}</div>
+                      <div className="text-[10px] text-muted-foreground line-clamp-2">{workflow.metadata.description}</div>
+                    </div>
                     <Star
                       size={12}
                       className={favorites.includes(workflow.id) ? 'fill-yellow-400 text-yellow-400' : 'text-gray-300'}
