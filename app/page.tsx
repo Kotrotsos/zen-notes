@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useEffect, useRef, useState, useCallback, useContext, createContext } from "react"
+import { useEffect, useRef, useState, useCallback, useContext, createContext, useMemo } from "react"
 import { Editor } from "@monaco-editor/react"
 import { useTheme } from "next-themes"
 import {
