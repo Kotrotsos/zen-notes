@@ -144,6 +144,8 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
   const [isEditorExpanded, setIsEditorExpanded] = useState(false)
   const [workflowExportAction, setWorkflowExportAction] = useState<string>("new-tab")
   const [workflowIncludeHeaders, setWorkflowIncludeHeaders] = useState(true)
+  const [showSingleField, setShowSingleField] = useState(false)
+  const [singleFieldName, setSingleFieldName] = useState("result")
   const promptVars = useMemo(() => {
     const vars = new Set<string>()
     if (!prompt) return vars
@@ -1572,7 +1574,29 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
                 </div>
               )}
               <div>
-                <h4 className="text-xs font-semibold text-muted-foreground uppercase mb-1">Results</h4>
+                <div className="flex items-center justify-between mb-2">
+                  <h4 className="text-xs font-semibold text-muted-foreground uppercase">Results</h4>
+                  {workflowResults.length > 0 && (
+                    <div className="flex items-center gap-2">
+                      <label className="flex items-center gap-1.5 text-xs">
+                        <input
+                          type="checkbox"
+                          checked={showSingleField}
+                          onChange={(e) => setShowSingleField(e.target.checked)}
+                          className="w-3 h-3"
+                        />
+                        <span>Show only field:</span>
+                      </label>
+                      <Input
+                        value={singleFieldName}
+                        onChange={(e) => setSingleFieldName(e.target.value)}
+                        placeholder="result"
+                        disabled={!showSingleField}
+                        className="h-6 w-24 text-xs px-2"
+                      />
+                    </div>
+                  )}
+                </div>
                 {isAdvancedProcessing ? (
                   <div className="text-xs text-muted-foreground">Running workflow...</div>
                 ) : workflowResults.length === 0 ? (
@@ -1583,7 +1607,7 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
                       <thead className="bg-muted/50">
                         <tr>
                           <th className="text-left p-2 w-14">Chunk</th>
-                          <th className="text-left p-2">Context</th>
+                          <th className="text-left p-2">{showSingleField ? singleFieldName : 'Context'}</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -1592,7 +1616,13 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
                             <td className="p-2 font-mono">{result.index + 1}</td>
                             <td className="p-2">
                               <pre className="text-[11px] font-mono whitespace-pre-wrap bg-muted/40 rounded p-2">
-                                {JSON.stringify(result.context, null, 2)}
+                                {showSingleField
+                                  ? (result.context[singleFieldName] !== undefined
+                                      ? (typeof result.context[singleFieldName] === 'object'
+                                          ? JSON.stringify(result.context[singleFieldName], null, 2)
+                                          : String(result.context[singleFieldName]))
+                                      : `Field "${singleFieldName}" not found`)
+                                  : JSON.stringify(result.context, null, 2)}
                               </pre>
                             </td>
                           </tr>
