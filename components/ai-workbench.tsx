@@ -269,6 +269,43 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedPromptId])
 
+  // Load workflow favorites and recent from localStorage
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem('zenNotes.workflowPreferences.v1')
+      if (stored) {
+        const prefs = JSON.parse(stored)
+        setWorkflowFavorites(prefs.favorites || [])
+        setWorkflowRecent(prefs.recent || [])
+      }
+    } catch (e) {
+      console.error('Failed to load workflow preferences', e)
+    }
+  }, [])
+
+  // Save workflow preferences to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem('zenNotes.workflowPreferences.v1', JSON.stringify({
+        favorites: workflowFavorites,
+        recent: workflowRecent
+      }))
+    } catch (e) {
+      console.error('Failed to save workflow preferences', e)
+    }
+  }, [workflowFavorites, workflowRecent])
+
+  // Track workflow modifications
+  useEffect(() => {
+    if (currentWorkflowId && availableWorkflows) {
+      const current = availableWorkflows.find(w => w.id === currentWorkflowId)
+      if (current) {
+        const { body } = parseWorkflowFile(current.content)
+        setIsWorkflowModified(workflowScript !== body)
+      }
+    }
+  }, [workflowScript, currentWorkflowId, availableWorkflows])
+
   // Process a single chunk
   const processChunk = async (chunk: string, index: number) => {
     try {
@@ -773,6 +810,86 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
       link.click()
       URL.revokeObjectURL(link.href)
     }
+  }
+
+  const handleLoadWorkflow = (id: string) => {
+    const workflow = availableWorkflows?.find(w => w.id === id)
+    if (!workflow) return
+
+    // Check for unsaved changes
+    if (isWorkflowModified) {
+      const confirm = window.confirm('You have unsaved changes. Load anyway?')
+      if (!confirm) return
+    }
+
+    const { body } = parseWorkflowFile(workflow.content)
+    setWorkflowScript(body)
+    setCurrentWorkflowId(id)
+    setIsWorkflowModified(false)
+
+    // Add to recent (max 5)
+    setWorkflowRecent(prev => {
+      const filtered = prev.filter(wid => wid !== id)
+      return [id, ...filtered].slice(0, 5)
+    })
+  }
+
+  const handleToggleWorkflowFavorite = (id: string) => {
+    setWorkflowFavorites(prev => {
+      if (prev.includes(id)) {
+        return prev.filter(wid => wid !== id)
+      } else {
+        return [...prev, id]
+      }
+    })
+  }
+
+  const handleSaveWorkflow = () => {
+    if (!onSaveWorkflow) return
+
+    const rawName = workflowSaveName.trim() || 'Untitled'
+    const fileName = rawName.toLowerCase().endsWith('.workflow') ? rawName : `${rawName}.workflow`
+
+    const exists = availableWorkflows?.some(w => w.name === fileName)
+    if (exists && !workflowOverwrite) {
+      return // User must check overwrite
+    }
+
+    const metadata: WorkflowMetadata = {
+      name: workflowSaveName.trim() || 'Untitled Workflow',
+      category: workflowSaveCategory,
+      difficulty: workflowSaveDifficulty,
+      tags: workflowSaveTags.split(',').map(t => t.trim()).filter(Boolean),
+      description: workflowSaveDescription.trim(),
+      use_cases: workflowSaveUseCases.split(',').map(u => u.trim()).filter(Boolean)
+    }
+
+    const content = buildWorkflowFile(metadata, workflowScript)
+    onSaveWorkflow(fileName, content, workflowSaveFolder || 'Workflows', metadata)
+
+    setShowWorkflowSave(false)
+    setWorkflowSaveName('')
+    setWorkflowSaveDescription('')
+    setWorkflowSaveTags('')
+    setWorkflowSaveUseCases('')
+    setWorkflowOverwrite(false)
+    setIsWorkflowModified(false)
+  }
+
+  const handleOpenSaveDialog = () => {
+    // Pre-fill with current workflow metadata if editing an existing one
+    if (currentWorkflowId && availableWorkflows) {
+      const current = availableWorkflows.find(w => w.id === currentWorkflowId)
+      if (current) {
+        setWorkflowSaveName(current.name)
+        setWorkflowSaveCategory(current.metadata.category)
+        setWorkflowSaveDifficulty(current.metadata.difficulty)
+        setWorkflowSaveTags(current.metadata.tags.join(', '))
+        setWorkflowSaveDescription(current.metadata.description)
+        setWorkflowSaveUseCases(current.metadata.use_cases.join(', '))
+      }
+    }
+    setShowWorkflowSave(true)
   }
 
   return (
