@@ -1,6 +1,7 @@
 "use client"
 
 import React, { useState, useRef, useEffect, useMemo } from "react"
+import { Editor } from "@monaco-editor/react"
 import { X, Play, Square, ChevronDown, ChevronUp, Zap, FilePlus, FileText, Download } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -9,6 +10,36 @@ import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from "@
 import { Label } from "@/components/ui/label"
 import { Slider } from "@/components/ui/slider"
 import { parseCsv, isValidCsv } from "@/lib/csv"
+import WorkflowDropdown from '@/components/workflow-dropdown'
+import WorkflowBrowser from '@/components/workflow-browser'
+import { Workflow, WorkflowMetadata } from '@/lib/workflow-types'
+import { parseWorkflowFile, buildWorkflowFile } from '@/lib/workflow-service'
+import { BookOpen, Save } from 'lucide-react'
+
+const DEFAULT_WORKFLOW_SCRIPT = `# Advanced workflow example
+nodes:
+  - id: prepare
+    type: func
+    expr: |
+      const base = row ? Object.values(row).join('\n') : chunk
+      return { text: base }
+
+  - id: summarize
+    type: prompt
+    prompt: |
+      Summarize the following information in 3 bullet points.
+
+      {{ text }}
+    model: gpt-4.1
+    temperature: 0.5
+    expect: text
+
+  - id: print
+    type: print
+    message: "Chunk {{ index }} summary: {{ summarize }}"
+`
+
+const DEFAULT_ADVANCED_SYSTEM_PROMPT = `You are a careful assistant that follows instructions exactly and only returns the requested output. If the user asks for JSON, return valid JSON. Be concise.`
 
 interface AIWorkbenchProps {
   activeTabContent: string
@@ -20,6 +51,10 @@ interface AIWorkbenchProps {
   onSavePrompt?: (name: string, content: string, folderPath?: string) => void
   selectedPromptId?: string
   onActivityChange?: (active: boolean) => void
+  availableWorkflows?: Workflow[]
+  onSaveWorkflow?: (name: string, content: string, folderPath?: string, metadata?: WorkflowMetadata) => void
+  onDeleteWorkflow?: (id: string) => void
+  selectedWorkflowId?: string
 }
 
 type SeparatorType = "none" | "newline" | "blank-line" | "word" | "characters" | "custom"
@@ -39,6 +74,12 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
   const [temperature, setTemperature] = useState(0.7)
   const [maxTokens, setMaxTokens] = useState(500)
   const [showAdvanced, setShowAdvanced] = useState(false)
+  const [mode, setMode] = useState<'basic' | 'advanced'>("basic")
+  const [workflowScript, setWorkflowScript] = useState<string>(() => DEFAULT_WORKFLOW_SCRIPT)
+  const [workflowLogs, setWorkflowLogs] = useState<string[]>([])
+  const [workflowError, setWorkflowError] = useState<string | null>(null)
+  const [workflowResults, setWorkflowResults] = useState<Array<{ index: number; context: Record<string, any> }>>([])
+  const [isAdvancedProcessing, setIsAdvancedProcessing] = useState(false)
   const [selectedPromptIdState, setSelectedPromptIdState] = useState<string>("")
   const [saveOpen, setSaveOpen] = useState(false)
   const [saveName, setSaveName] = useState("")
@@ -68,6 +109,22 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
   const [exportAction, setExportAction] = useState<string>("new-tab")
   const [includeHeaders, setIncludeHeaders] = useState(true)
   const abortControllerRef = useRef<AbortController | null>(null)
+
+  // Workflow management
+  const [currentWorkflowId, setCurrentWorkflowId] = useState<string | null>(null)
+  const [isWorkflowModified, setIsWorkflowModified] = useState(false)
+  const [showWorkflowBrowser, setShowWorkflowBrowser] = useState(false)
+  const [workflowFavorites, setWorkflowFavorites] = useState<string[]>([])
+  const [workflowRecent, setWorkflowRecent] = useState<string[]>([])
+  const [showWorkflowSave, setShowWorkflowSave] = useState(false)
+  const [workflowSaveName, setWorkflowSaveName] = useState('')
+  const [workflowSaveFolder, setWorkflowSaveFolder] = useState('Workflows')
+  const [workflowSaveCategory, setWorkflowSaveCategory] = useState('Content Generation')
+  const [workflowSaveDifficulty, setWorkflowSaveDifficulty] = useState<'beginner' | 'intermediate' | 'advanced'>('beginner')
+  const [workflowSaveTags, setWorkflowSaveTags] = useState('')
+  const [workflowSaveDescription, setWorkflowSaveDescription] = useState('')
+  const [workflowSaveUseCases, setWorkflowSaveUseCases] = useState('')
+  const [workflowOverwrite, setWorkflowOverwrite] = useState(false)
   const promptVars = useMemo(() => {
     const vars = new Set<string>()
     if (!prompt) return vars
@@ -381,6 +438,215 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
     }
   }
 
+  const requestPromptResponse = async ({
+    promptText,
+    chunkText,
+    includeChunkValue,
+    modelOverride,
+    temperatureOverride,
+    maxTokensOverride,
+    systemPrompt,
+  }: {
+    promptText: string
+    chunkText: string
+    includeChunkValue: boolean
+    modelOverride?: string
+    temperatureOverride?: number
+    maxTokensOverride?: number
+    systemPrompt?: string
+  }): Promise<string> => {
+    const response = await fetch("/api/ai-workbench", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        prompt: promptText,
+        chunk: chunkText,
+        includeChunk: includeChunkValue,
+        model: modelOverride || model,
+        temperature: temperatureOverride ?? temperature,
+        maxTokens: maxTokensOverride ?? maxTokens,
+        system: systemPrompt,
+      }),
+    })
+
+    if (!response.ok || !response.body) {
+      const errText = await response.text().catch(() => "")
+      throw new Error(errText || `HTTP ${response.status}`)
+    }
+
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ""
+    let accumulated = ""
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const parts = buffer.split("\n\n")
+      buffer = parts.pop() || ""
+      for (const part of parts) {
+        if (!part.trim()) continue
+        const lines = part.split("\n")
+        let event = ""
+        let data = ""
+        for (const line of lines) {
+          if (line.startsWith("event:")) event = line.slice(6).trim()
+          if (line.startsWith("data:")) data = line.slice(5).trim()
+        }
+        if (!data) continue
+        if (event === "content_delta") {
+          try {
+            const payload = JSON.parse(data)
+            const delta = payload?.delta || ""
+            accumulated += delta
+          } catch (err) {
+            console.error("Failed to parse delta", err)
+          }
+        } else if (event === "error") {
+          try {
+            const payload = JSON.parse(data)
+            throw new Error(payload.error || "Unknown error")
+          } catch (err: any) {
+            throw new Error(err?.message || "Unknown error")
+          }
+        }
+      }
+    }
+
+    return accumulated.trim()
+  }
+
+  const handleAdvancedRun = async () => {
+    setWorkflowError(null)
+    setWorkflowLogs([])
+    setWorkflowResults([])
+    setIsAdvancedProcessing(true)
+    try {
+      onActivityChange?.(true)
+    } catch {}
+
+    try {
+      const parsed = parseWorkflowScript(workflowScript)
+      const nodes: WorkflowNode[] = Array.isArray(parsed?.nodes) ? parsed.nodes : []
+      if (!nodes.length) {
+        throw new Error("Workflow script must define a 'nodes' array")
+      }
+
+      const logs: string[] = []
+      const results: Array<{ index: number; context: Record<string, any> }> = []
+
+      for (let i = 0; i < memoChunks.length; i++) {
+        const chunkText = memoChunks[i]
+        let rowData: any = null
+        if (isCsvMode) {
+          try {
+            rowData = chunkText ? JSON.parse(chunkText) : null
+          } catch {
+            rowData = null
+          }
+        }
+
+        const context: Record<string, any> = {
+          chunk: chunkText,
+          row: rowData,
+          data: rowData,
+          index: i,
+        }
+
+        const helpers = {
+          template: (tpl: string) => renderTemplate(tpl, context),
+          log: (msg: string) => logs.push(`[${i}] ${msg}`),
+        }
+
+        let skipRow = false
+
+        for (const node of nodes) {
+          const type = (node.type || '').toLowerCase()
+          const nodeId = node.id || `${type || 'node'}_${i}`
+
+          if (type === 'func') {
+            const expr = node.expr || node.code
+            if (!expr) continue
+            try {
+              const fn = new Function('context', 'chunk', 'row', 'helpers', expr)
+              const result = await Promise.resolve(fn(context, chunkText, rowData, helpers))
+              if (result && typeof result === 'object') {
+                if (result.skip) {
+                  skipRow = true
+                  logs.push(`[${i}] func ${nodeId} skipped row`)
+                  break
+                }
+                Object.assign(context, result)
+              }
+            } catch (err: any) {
+              logs.push(`[${i}] func ${nodeId} error: ${err?.message || err}`)
+              skipRow = true
+              break
+            }
+          } else if (type === 'prompt') {
+            const promptTemplate = node.prompt || ''
+            if (!promptTemplate) {
+              logs.push(`[${i}] prompt ${nodeId} missing prompt text`)
+              skipRow = true
+              break
+            }
+            const systemPrompt = renderTemplate(node.system || DEFAULT_ADVANCED_SYSTEM_PROMPT, context)
+            const promptText = renderTemplate(promptTemplate, context)
+            const appendChunk = node.append_chunk ?? false
+            try {
+              const responseText = await requestPromptResponse({
+                promptText,
+                chunkText: appendChunk ? chunkText : '',
+                includeChunkValue: appendChunk,
+                modelOverride: node.model,
+                temperatureOverride: node.temperature,
+                maxTokensOverride: node.maxTokens ?? node.max_tokens,
+                systemPrompt,
+              })
+              const key = node.output_key || node.output || nodeId
+              if ((node.expect || '').toLowerCase() === 'json') {
+                try {
+                  context[key] = JSON.parse(responseText)
+                } catch {
+                  logs.push(`[${i}] prompt ${nodeId} returned invalid JSON, storing raw text`)
+                  context[key] = responseText
+                }
+              } else {
+                context[key] = responseText
+              }
+              helpers.log(`prompt ${nodeId} complete`)
+            } catch (err: any) {
+              logs.push(`[${i}] prompt ${nodeId} error: ${err?.message || err}`)
+              skipRow = true
+              break
+            }
+          } else if (type === 'print') {
+            const message = renderTemplate(node.message || '', context)
+            logs.push(`[${i}] ${message}`)
+          } else {
+            logs.push(`[${i}] Unknown node type: ${node.type}`)
+          }
+        }
+
+        if (!skipRow) {
+          const snapshot = { ...context, chunk: chunkText }
+          results.push({ index: i, context: snapshot })
+        }
+      }
+
+      setWorkflowLogs(logs)
+      setWorkflowResults(results)
+    } catch (err: any) {
+      setWorkflowError(err?.message || 'Workflow failed')
+    } finally {
+      setIsAdvancedProcessing(false)
+      try { onActivityChange?.(false) } catch {}
+    }
+  }
+
   // Splitter handlers
   const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n))
   const onSplitterMouseDown = (e: React.MouseEvent) => {
@@ -523,291 +789,328 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
       </div>
 
       {/* Split Container: Settings (top) + Results (bottom) */}
-      <div ref={containerRef} className="flex-1 min-h-0 flex flex-col">
-        {/* Settings Panel */}
+            <div ref={containerRef} className="flex-1 min-h-0 flex flex-col">
         <div
           className="p-4 border-b space-y-4 overflow-auto"
           style={{ height: `calc(${(panelRatio * 100).toFixed(2)}% - 2px)` }}
         >
-        {/* Prompt Selection + Save */}
-        <div className="space-y-2">
-          <Label className="text-xs">Prompt Template</Label>
           <div className="flex items-center gap-2">
-            <select
-              className="h-8 text-xs border border-border rounded bg-background px-2 flex-1"
-              value={selectedPromptIdState}
-              onChange={(e) => handleSelectPrompt(e.target.value)}
-            >
-              <option value="">— Select a saved prompt —</option>
-              {availablePrompts.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
-            <Button variant="secondary" size="sm" onClick={() => setSaveOpen(true)}>Save Prompt</Button>
-          </div>
-        </div>
-
-        {/* Save Prompt Dialog */}
-        {saveOpen && (
-          <div className="border border-border rounded p-3 space-y-2 bg-muted/30">
-            <div className="flex items-center justify-between">
-              <div className="text-xs font-semibold">Save Prompt</div>
-              <button className="text-xs" onClick={() => setSaveOpen(false)}>Close</button>
+            <div className="inline-flex rounded border border-border overflow-hidden">
+              <button
+                className={`px-3 py-1 text-xs font-medium ${mode === 'basic' ? 'bg-primary text-primary-foreground' : 'bg-transparent text-muted-foreground hover:bg-muted/60'}`}
+                onClick={() => setMode('basic')}
+              >
+                Basic Mode
+              </button>
+              <button
+                className={`px-3 py-1 text-xs font-medium ${mode === 'advanced' ? 'bg-primary text-primary-foreground' : 'bg-transparent text-muted-foreground hover:bg-muted/60'}`}
+                onClick={() => setMode('advanced')}
+              >
+                Advanced Mode
+              </button>
             </div>
+          </div>
+
+          {isCsvMode && (
+            <div className="space-y-2 p-3 bg-blue-50 dark:bg-blue-950 rounded border border-blue-200 dark:border-blue-800">
+              <Label className="text-xs font-semibold text-blue-900 dark:text-blue-100">CSV/Table Mode</Label>
+              <p className="text-xs text-blue-700 dark:text-blue-300">
+                Each row will be processed. Use variables in your prompt or workflow:
+              </p>
+              <div className="flex flex-wrap gap-1 mt-1">
+                {csvHeaders.map(header => (
+                  <code key={header} className="text-xs px-1.5 py-0.5 bg-blue-100 dark:bg-blue-900 rounded">
+                    {`{{ ${header} }}`}
+                  </code>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {isCsvMode && (
             <div className="space-y-2">
-              <div>
-                <Label className="text-xs">Name</Label>
-                <Input
-                  className="h-8 text-xs"
-                  placeholder="My prompt.prompt"
-                  value={saveName}
-                  onChange={(e) => setSaveName(e.target.value)}
-                />
-              </div>
-              <div>
-                <Label className="text-xs">Folder</Label>
-                <Input
-                  className="h-8 text-xs"
-                  placeholder="Prompts"
-                  value={saveFolder}
-                  onChange={(e) => setSaveFolder(e.target.value)}
-                />
-              </div>
-              {availablePrompts.some((p) => (saveName?.toLowerCase().endsWith('.prompt') ? p.name === saveName : p.name === `${saveName}.prompt`)) && (
-                <label className="flex items-center gap-2 text-xs text-destructive">
-                  <input type="checkbox" checked={overwrite} onChange={(e) => setOverwrite(e.target.checked)} />
-                  A prompt with this name exists. Overwrite?
-                </label>
-              )}
-              <div className="flex items-center gap-2">
-                <Button size="sm" onClick={handleSavePrompt} disabled={!saveName.trim() || (availablePrompts.some((p) => (saveName?.toLowerCase().endsWith('.prompt') ? p.name === saveName : p.name === `${saveName}.prompt`)) && !overwrite)}>Save</Button>
-                <Button size="sm" variant="ghost" onClick={() => setSaveOpen(false)}>Cancel</Button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Model Selection */}
-        <div className="space-y-2">
-          <Label className="text-xs">Model</Label>
-          <Select value={model} onValueChange={setModel}>
-            <SelectTrigger className="h-8 text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="gpt-4.1">GPT-4.1</SelectItem>
-              <SelectItem value="gpt-4o">GPT-4o</SelectItem>
-              <SelectItem value="gpt-4.1-mini">GPT-4.1 Mini</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-
-        {/* Prompt */}
-        <div className="space-y-2">
-          <Label className="text-xs">Prompt</Label>
-          <Textarea
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            placeholder="Enter your prompt here..."
-            className="text-xs min-h-[80px]"
-          />
-        </div>
-
-        {/* CSV Mode Info */}
-        {isCsvMode && (
-          <div className="space-y-2 p-3 bg-blue-50 dark:bg-blue-950 rounded border border-blue-200 dark:border-blue-800">
-            <Label className="text-xs font-semibold text-blue-900 dark:text-blue-100">CSV/Table Mode</Label>
-            <p className="text-xs text-blue-700 dark:text-blue-300">
-              Each row will be processed. Use variables in your prompt:
-            </p>
-            <div className="flex flex-wrap gap-1 mt-1">
-              {csvHeaders.map(header => (
-                <code key={header} className="text-xs px-1.5 py-0.5 bg-blue-100 dark:bg-blue-900 rounded">
-                  {`{{ ${header} }}`}
-                </code>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Row Limit (CSV only) */}
-        {isCsvMode && (
-          <div className="space-y-2">
-            <Label className="text-xs">Process First N Rows (0 = all)</Label>
-            <Input
-              type="number"
-              value={csvRowLimit}
-              onChange={(e) => setCsvRowLimit(Number(e.target.value))}
-              className="h-8 text-xs"
-              min={0}
-              placeholder="0 for all rows"
-            />
-          </div>
-        )}
-
-        {/* Separator Type (only for non-CSV) */}
-        {!isCsvMode && (
-          <div className="space-y-2">
-            <Label className="text-xs">Chunk By</Label>
-            <Select value={separatorType} onValueChange={(v) => setSeparatorType(v as SeparatorType)}>
-              <SelectTrigger className="h-8 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">None (Whole Document)</SelectItem>
-                <SelectItem value="newline">Newline</SelectItem>
-                <SelectItem value="blank-line">Blank Line</SelectItem>
-                <SelectItem value="word">Word Count</SelectItem>
-                <SelectItem value="characters">Character Count</SelectItem>
-                <SelectItem value="custom">Custom Separator</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-        )}
-
-        {/* Conditional separator inputs (only for non-CSV) */}
-        {!isCsvMode && separatorType === "word" && (
-          <div className="space-y-2">
-            <Label className="text-xs">Words per Chunk</Label>
-            <Input
-              type="number"
-              value={wordCount}
-              onChange={(e) => setWordCount(Number(e.target.value))}
-              className="h-8 text-xs"
-              min={1}
-            />
-          </div>
-        )}
-
-        {!isCsvMode && separatorType === "characters" && (
-          <div className="space-y-2">
-            <Label className="text-xs">Characters per Chunk</Label>
-            <Input
-              type="number"
-              value={charCount}
-              onChange={(e) => setCharCount(Number(e.target.value))}
-              className="h-8 text-xs"
-              min={1}
-            />
-          </div>
-        )}
-
-        {!isCsvMode && separatorType === "custom" && (
-          <div className="space-y-2">
-            <Label className="text-xs">Custom Separator</Label>
-            <Input
-              value={customSeparator}
-              onChange={(e) => setCustomSeparator(e.target.value)}
-              placeholder="Enter separator (e.g., '---')"
-              className="h-8 text-xs"
-            />
-          </div>
-        )}
-
-        {/* Advanced Settings Toggle */}
-        <div className="pt-2">
-          <button
-            onClick={() => setShowAdvanced(!showAdvanced)}
-            className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground"
-          >
-            {showAdvanced ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-            Advanced Settings
-          </button>
-        </div>
-
-        {/* Advanced Settings */}
-        {showAdvanced && (
-          <div className="space-y-4 pt-2">
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label className="text-xs">Temperature</Label>
-                <span className="text-xs text-muted-foreground">{temperature}</span>
-              </div>
-              <Slider
-                value={[temperature]}
-                onValueChange={(v) => setTemperature(v[0])}
-                min={0}
-                max={2}
-                step={0.1}
-                className="w-full"
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label className="text-xs">Max Tokens</Label>
+              <Label className="text-xs">Process First N Rows (0 = all)</Label>
               <Input
                 type="number"
-                value={maxTokens}
-                onChange={(e) => setMaxTokens(Number(e.target.value))}
+                value={csvRowLimit}
+                onChange={(e) => setCsvRowLimit(Number(e.target.value))}
                 className="h-8 text-xs"
-                min={1}
-                max={4000}
+                min={0}
+                placeholder="0 for all rows"
               />
             </div>
-          </div>
-        )}
+          )}
 
-        {/* Run/Stop Button */}
-        <div className="pt-2">
-          {!isProcessing ? (
+          {!isCsvMode && (
+            <div className="space-y-2">
+              <Label className="text-xs">Chunk By</Label>
+              <Select value={separatorType} onValueChange={(v) => setSeparatorType(v as SeparatorType)}>
+                <SelectTrigger className="h-8 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">None (Whole Document)</SelectItem>
+                  <SelectItem value="newline">Newline</SelectItem>
+                  <SelectItem value="blank-line">Blank Line</SelectItem>
+                  <SelectItem value="word">Word Count</SelectItem>
+                  <SelectItem value="characters">Character Count
+                  </SelectItem>
+                  <SelectItem value="custom">Custom Separator</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
+          {!isCsvMode && separatorType === "word" && (
+            <div className="space-y-2">
+              <Label className="text-xs">Words per Chunk</Label>
+              <Input
+                type="number"
+                value={wordCount}
+                onChange={(e) => setWordCount(Number(e.target.value))}
+                className="h-8 text-xs"
+                min={1}
+              />
+            </div>
+          )}
+
+          {!isCsvMode && separatorType === "characters" && (
+            <div className="space-y-2">
+              <Label className="text-xs">Characters per Chunk</Label>
+              <Input
+                type="number"
+                value={charCount}
+                onChange={(e) => setCharCount(Number(e.target.value))}
+                className="h-8 text-xs"
+                min={1}
+              />
+            </div>
+          )}
+
+          {!isCsvMode && separatorType === "custom" && (
+            <div className="space-y-2">
+              <Label className="text-xs">Custom Separator
+              </Label>
+              <Input
+                value={customSeparator}
+                onChange={(e) => setCustomSeparator(e.target.value)}
+                placeholder="Enter separator (e.g., '---')"
+                className="h-8 text-xs"
+              />
+            </div>
+          )}
+
+          {mode === 'basic' ? (
             <>
-              {/* Data weight warning */}
-              {largeData.over && (
-                <div className="mb-2 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
-                  Large input detected ({largeData.count} chunks, ~{Math.round(largeData.chars/1024)} KB). Consider using Row Limit or coarser chunking for speed.
+              <div className="space-y-2">
+                <Label className="text-xs">Prompt Template</Label>
+                <div className="flex items-center gap-2">
+                  <select
+                    className="h-8 text-xs border border-border rounded bg-background px-2 flex-1"
+                    value={selectedPromptIdState}
+                    onChange={(e) => handleSelectPrompt(e.target.value)}
+                  >
+                    <option value="">— Select a saved prompt —</option>
+                    {availablePrompts.map((p) => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
+                  <Button variant="secondary" size="sm" onClick={() => setSaveOpen(true)}>Save Prompt</Button>
+                </div>
+              </div>
+
+              {saveOpen && (
+                <div className="border border-border rounded p-3 space-y-2 bg-muted/30">
+                  <div className="flex items-center justify-between">
+                    <div className="text-xs font-semibold">Save Prompt</div>
+                    <button className="text-xs" onClick={() => setSaveOpen(false)}>Close</button>
+                  </div>
+                  <div className="space-y-2">
+                    <div>
+                      <Label className="text-xs">Name</Label>
+                      <Input
+                        className="h-8 text-xs"
+                        placeholder="My prompt.prompt"
+                        value={saveName}
+                        onChange={(e) => setSaveName(e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Folder</Label>
+                      <Input
+                        className="h-8 text-xs"
+                        placeholder="Prompts"
+                        value={saveFolder}
+                        onChange={(e) => setSaveFolder(e.target.value)}
+                      />
+                    </div>
+                    {availablePrompts.some((p) => (saveName?.toLowerCase().endsWith('.prompt') ? p.name === saveName : p.name === `${saveName}.prompt`)) && (
+                      <label className="flex items-center gap-2 text-xs text-destructive">
+                        <input type="checkbox" checked={overwrite} onChange={(e) => setOverwrite(e.target.checked)} />
+                        A prompt with this name exists. Overwrite?
+                      </label>
+                    )}
+                    <div className="flex items-center gap-2">
+                      <Button size="sm" onClick={handleSavePrompt} disabled={!saveName.trim() || (availablePrompts.some((p) => (saveName?.toLowerCase().endsWith('.prompt') ? p.name === saveName : p.name === `${saveName}.prompt`)) && !overwrite)}>Save</Button>
+                      <Button size="sm" variant="ghost" onClick={() => setSaveOpen(false)}>Cancel</Button>
+                    </div>
+                  </div>
                 </div>
               )}
-              <Button onClick={handleRun} className="w-full" size="sm" disabled={!prompt.trim()}>
-                <Play size={14} className="mr-2" />
-                Run on {memoChunks.length} chunk(s)
-              </Button>
+
+              <div className="space-y-2">
+                <Label className="text-xs">Model</Label>
+                <Select value={model} onValueChange={setModel}>
+                  <SelectTrigger className="h-8 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="gpt-4.1">GPT-4.1</SelectItem>
+                    <SelectItem value="gpt-4o">GPT-4o</SelectItem>
+                    <SelectItem value="gpt-4.1-mini">GPT-4.1 Mini</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label className="text-xs">Prompt</Label>
+                <Textarea
+                  value={prompt}
+                  onChange={(e) => setPrompt(e.target.value)}
+                  placeholder="Enter your prompt here..."
+                  className="text-xs min-h-[80px]"
+                />
+              </div>
+
+              <div className="pt-2">
+                <button
+                  onClick={() => setShowAdvanced(!showAdvanced)}
+                  className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground"
+                >
+                  {showAdvanced ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                  Advanced Settings
+                </button>
+              </div>
+
+              {showAdvanced && (
+                <div className="space-y-4 pt-2">
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <Label className="text-xs">Temperature</Label>
+                      <span className="text-xs text-muted-foreground">{temperature}</span>
+                    </div>
+                    <Slider
+                      value={[temperature]}
+                      onValueChange={(v) => setTemperature(v[0])}
+                      min={0}
+                      max={2}
+                      step={0.1}
+                      className="w-full"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label className="text-xs">Max Tokens</Label>
+                    <Input
+                      type="number"
+                      value={maxTokens}
+                      onChange={(e) => setMaxTokens(Number(e.target.value))}
+                      className="h-8 text-xs"
+                      min={1}
+                      max={4000}
+                    />
+                  </div>
+                </div>
+              )}
+
+              <div className="pt-2">
+                {!isProcessing ? (
+                  <>
+                    {largeData.over && (
+                      <div className="mb-2 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                        Large input detected ({largeData.count} chunks, ~{Math.round(largeData.chars/1024)} KB). Consider using Row Limit or coarser chunking for speed.
+                      </div>
+                    )}
+                    <Button onClick={handleRun} className="w-full" size="sm" disabled={!prompt.trim()}>
+                      <Play size={14} className="mr-2" />
+                      Run on {memoChunks.length} chunk(s)
+                    </Button>
+                  </>
+                ) : (
+                  <Button onClick={handleStop} variant="destructive" className="w-full" size="sm">
+                    <Square size={14} className="mr-2" />
+                    Stop Processing
+                  </Button>
+                )}
+              </div>
+
+              {results.length > 0 && !isProcessing && (
+                <div className="pt-4 border-t mt-4 space-y-2">
+                  <Label className="text-xs">Export Results</Label>
+                  <Select value={exportAction} onValueChange={setExportAction}>
+                    <SelectTrigger className="h-8 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="new-tab">Create New Tab</SelectItem>
+                      <SelectItem value="append">Append to Current Tab</SelectItem>
+                      <SelectItem value="csv">Download as CSV</SelectItem>
+                    </SelectContent>
+                  </Select>
+
+                  {(exportAction === "new-tab" || exportAction === "append") && (
+                    <label className="flex items-center gap-2 text-xs">
+                      <input
+                        type="checkbox"
+                        checked={includeHeaders}
+                        onChange={(e) => setIncludeHeaders(e.target.checked)}
+                        className="w-3 h-3"
+                      />
+                      <span>Include chunk headers</span>
+                    </label>
+                  )}
+
+                  <Button onClick={handleExport} className="w-full" size="sm" variant="secondary">
+                    Export
+                  </Button>
+                  <p className="text-xs text-muted-foreground">
+                    {results.filter(r => r.isComplete && !r.error).length} of {results.length} completed
+                  </p>
+                </div>
+              )}
             </>
           ) : (
-            <Button onClick={handleStop} variant="destructive" className="w-full" size="sm">
-              <Square size={14} className="mr-2" />
-              Stop Processing
-            </Button>
+            <div className="space-y-3">
+              <p className="text-xs text-muted-foreground">
+                Define a workflow using YAML. Each chunk or row flows through the nodes in order. Available node types:
+                <code className="mx-1">func</code>, <code className="mx-1">prompt</code>, and <code className="mx-1">print</code>.
+              </p>
+              <div className="border border-border rounded overflow-hidden">
+                <Editor
+                  height="280px"
+                  language="yaml"
+                  value={workflowScript}
+                  onChange={(value) => setWorkflowScript(value ?? "")}
+                  options={{ minimap: { enabled: false }, fontSize: 12, wordWrap: "on" }}
+                />
+              </div>
+              {workflowError && (
+                <div className="text-xs text-destructive border border-destructive/40 bg-destructive/10 rounded px-2 py-1">
+                  {workflowError}
+                </div>
+              )}
+              <div className="flex items-center gap-2">
+                <Button size="sm" onClick={handleAdvancedRun} disabled={isAdvancedProcessing}>
+                  {isAdvancedProcessing ? 'Running…' : 'Run Workflow'}
+                </Button>
+                <Button size="sm" variant="secondary" onClick={() => setWorkflowScript(DEFAULT_WORKFLOW_SCRIPT)}>
+                  Reset Example
+                </Button>
+              </div>
+            </div>
           )}
         </div>
 
-        {/* Export Actions - Show after processing */}
-        {results.length > 0 && !isProcessing && (
-          <div className="pt-4 border-t mt-4 space-y-2">
-            <Label className="text-xs">Export Results</Label>
-            <Select value={exportAction} onValueChange={setExportAction}>
-              <SelectTrigger className="h-8 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="new-tab">Create New Tab</SelectItem>
-                <SelectItem value="append">Append to Current Tab</SelectItem>
-                <SelectItem value="csv">Download as CSV</SelectItem>
-              </SelectContent>
-            </Select>
-
-            {(exportAction === "new-tab" || exportAction === "append") && (
-              <label className="flex items-center gap-2 text-xs">
-                <input
-                  type="checkbox"
-                  checked={includeHeaders}
-                  onChange={(e) => setIncludeHeaders(e.target.checked)}
-                  className="w-3 h-3"
-                />
-                <span>Include chunk headers</span>
-              </label>
-            )}
-
-            <Button onClick={handleExport} className="w-full" size="sm" variant="secondary">
-              Export
-            </Button>
-            <p className="text-xs text-muted-foreground">
-              {results.filter(r => r.isComplete && !r.error).length} of {results.length} completed
-            </p>
-          </div>
-        )}
-        </div>
-
-        {/* Divider */}
         <div
           onMouseDown={onSplitterMouseDown}
           title="Drag to resize"
@@ -817,90 +1120,255 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
           <div className="absolute left-1/2 -translate-x-1/2 top-1/2 -translate-y-1/2 w-16 h-2 rounded-full bg-border group-hover:bg-primary/60" />
         </div>
 
-        {/* Results Panel */}
         <div className="flex-1 overflow-auto">
-          {results.length === 0 ? (
-            <div className="text-center text-sm text-muted-foreground py-8">
-              Configure settings and click Run to process your document
-            </div>
-          ) : (
-            <table className="w-full text-xs border-collapse">
-            <thead className="sticky top-0 bg-muted/50 border-b">
-              <tr>
-                <th className="text-left p-2 font-semibold w-12">#</th>
-                <th className="text-left p-2 font-semibold w-[35%]">Chunk</th>
-                <th className="text-left p-2 font-semibold">Response</th>
-                <th className="text-left p-2 font-semibold w-24">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {results.map((result) => (
-                <tr
-                  key={result.index}
-                  className={`border-b ${
-                    result.index === currentChunkIndex && isProcessing
-                      ? "bg-primary/5"
-                      : result.error
-                      ? "bg-destructive/5"
-                      : ""
-                  }`}
-                >
-                  <td className="p-2 align-top font-mono">{result.index + 1}</td>
-                  <td className="p-2 align-top">
-                    <div className="max-h-32 overflow-auto">
-                      <pre className="whitespace-pre-wrap font-mono text-[10px] text-muted-foreground">
-                        {result.chunk}
-                      </pre>
-                    </div>
-                    <div className="text-[10px] text-muted-foreground mt-1">
-                      {result.chunk.length} chars
-                    </div>
-                  </td>
-                  <td className="p-2 align-top">
-                    {result.error ? (
-                      <div className="text-destructive whitespace-pre-wrap">
-                        {result.error}
-                      </div>
-                    ) : result.response ? (
-                      <div className="whitespace-pre-wrap">
-                        {result.response}
-                      </div>
-                    ) : (
-                      <div className="text-muted-foreground italic">
-                        {result.index === currentChunkIndex && isProcessing
-                          ? "Processing..."
-                          : "Waiting..."}
-                      </div>
-                    )}
-                  </td>
-                  <td className="p-2 align-top">
-                    <span
-                      className={`inline-block px-2 py-0.5 rounded text-[10px] font-medium ${
-                        result.error
-                          ? "bg-destructive/10 text-destructive"
-                          : result.isComplete
-                          ? "bg-green-100 text-green-700"
-                          : result.index === currentChunkIndex && isProcessing
-                          ? "bg-blue-100 text-blue-700"
-                          : "bg-muted text-muted-foreground"
+          {mode === 'basic' ? (
+            results.length === 0 ? (
+              <div className="text-center text-sm text-muted-foreground py-8">
+                Configure settings and click Run to process your document
+              </div>
+            ) : (
+              <table className="w-full text-xs border-collapse">
+                <thead className="sticky top-0 bg-muted/50 border-b">
+                  <tr>
+                    <th className="text-left p-2 font-semibold w-12">#</th>
+                    <th className="text-left p-2 font-semibold w-[35%]">Chunk</th>
+                    <th className="text-left p-2 font-semibold">Response</th>
+                    <th className="text-left p-2 font-semibold w-24">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {results.map((result) => (
+                    <tr
+                      key={result.index}
+                      className={`border-b ${
+                        result.index === currentChunkIndex && isProcessing
+                          ? "bg-primary/5"
+                          : result.error
+                          ? "bg-destructive/5"
+                          : ""
                       }`}
                     >
-                      {result.error
-                        ? "Error"
-                        : result.isComplete
-                        ? "Complete"
-                        : result.index === currentChunkIndex && isProcessing
-                        ? "Processing"
-                        : "Pending"}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
+                      <td className="p-2 align-top font-mono">{result.index + 1}</td>
+                      <td className="p-2 align-top">
+                        <div className="max-h-32 overflow-auto">
+                          <pre className="whitespace-pre-wrap font-mono text-[10px] text-muted-foreground">
+                            {result.chunk}
+                          </pre>
+                        </div>
+                        <div className="text-[10px] text-muted-foreground mt-1">
+                          {result.chunk.length} chars
+                        </div>
+                      </td>
+                      <td className="p-2 align-top">
+                        {result.error ? (
+                          <div className="text-destructive whitespace-pre-wrap">
+                            {result.error}
+                          </div>
+                        ) : result.response ? (
+                          <div className="whitespace-pre-wrap">
+                            {result.response}
+                          </div>
+                        ) : (
+                          <div className="text-muted-foreground italic">
+                            {result.index === currentChunkIndex && isProcessing
+                              ? "Processing..."
+                              : "Waiting..."}
+                          </div>
+                        )}
+                      </td>
+                      <td className="p-2 align-top">
+                        <span
+                          className={`inline-block px-2 py-0.5 rounded text-[10px] font-medium ${
+                            result.error
+                              ? "bg-destructive/10 text-destructive"
+                              : result.isComplete
+                              ? "bg-green-100 text-green-700"
+                              : result.index === currentChunkIndex && isProcessing
+                              ? "bg-blue-100 text-blue-700"
+                              : "bg-muted text-muted-foreground"
+                          }`}
+                        >
+                          {result.error
+                            ? "Error"
+                            : result.isComplete
+                            ? "Complete"
+                            : result.index === currentChunkIndex && isProcessing
+                            ? "Processing"
+                            : "Pending"}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )
+          ) : (
+            <div className="p-4 space-y-4">
+              {workflowLogs.length > 0 && (
+                <div>
+                  <h4 className="text-xs font-semibold text-muted-foreground uppercase mb-1">Logs</h4>
+                  <div className="border border-border rounded bg-muted/20 max-h-48 overflow-auto text-[11px] font-mono whitespace-pre-wrap px-2 py-1">
+                    {workflowLogs.join('\n')}
+                  </div>
+                </div>
+              )}
+              <div>
+                <h4 className="text-xs font-semibold text-muted-foreground uppercase mb-1">Results</h4>
+                {isAdvancedProcessing ? (
+                  <div className="text-xs text-muted-foreground">Running workflow...</div>
+                ) : workflowResults.length === 0 ? (
+                  <div className="text-xs text-muted-foreground">Run the workflow to see results.</div>
+                ) : (
+                  <table className="w-full text-xs border border-border rounded overflow-hidden">
+                    <thead className="bg-muted/50">
+                      <tr>
+                        <th className="text-left p-2 w-14">Chunk</th>
+                        <th className="text-left p-2">Context</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {workflowResults.map((result) => (
+                        <tr key={result.index} className="border-t border-border/50 align-top">
+                          <td className="p-2 font-mono">{result.index + 1}</td>
+                          <td className="p-2">
+                            <pre className="text-[11px] font-mono whitespace-pre-wrap bg-muted/40 rounded p-2">
+                              {JSON.stringify(result.context, null, 2)}
+                            </pre>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
   )
+}
+interface WorkflowNode {
+  id?: string
+  type: string
+  prompt?: string
+  model?: string
+  temperature?: number
+  maxTokens?: number
+  max_tokens?: number
+  expect?: string
+  append_chunk?: boolean
+  system?: string
+  expr?: string
+  code?: string
+  message?: string
+  output?: string
+  output_key?: string
+}
+
+const resolvePath = (obj: Record<string, any>, path: string): any => {
+  const parts = path.split('.')
+  let current: any = obj
+  for (const part of parts) {
+    if (current == null) return ''
+    current = current[part]
+  }
+  return current ?? ''
+}
+
+const renderTemplate = (template: string, data: Record<string, any>): string => {
+  if (!template) return ''
+  return template.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, key) => {
+    const value = resolvePath(data, key)
+    if (value == null) return ''
+    if (typeof value === 'object') return JSON.stringify(value)
+    return String(value)
+  })
+}
+
+const coerceValue = (raw: string): any => {
+  if (raw.startsWith('"') && raw.endsWith('"')) {
+    return raw.slice(1, -1)
+  }
+  if (raw.startsWith("'") && raw.endsWith("'")) {
+    return raw.slice(1, -1)
+  }
+  if (raw === 'true') return true
+  if (raw === 'false') return false
+  if (raw === 'null') return null
+  if (!Number.isNaN(Number(raw)) && raw !== '') return Number(raw)
+  return raw
+}
+
+const parseWorkflowScript = (script: string): { nodes: WorkflowNode[] } => {
+  const nodes: WorkflowNode[] = []
+  let currentNode: Record<string, any> | null = null
+  let multilineKey: string | null = null
+  let multilineBuffer: string[] = []
+
+  const flushMultiline = () => {
+    if (currentNode && multilineKey) {
+      currentNode[multilineKey] = multilineBuffer.join('\n')
+    }
+    multilineKey = null
+    multilineBuffer = []
+  }
+
+  const lines = script.split(/\r?\n/)
+  for (const rawLine of lines) {
+    const line = rawLine.replace(/\t/g, '  ')
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#')) continue
+    if (trimmed === 'nodes:' || trimmed === '- nodes:') {
+      flushMultiline()
+      continue
+    }
+
+    if (trimmed.startsWith('- ')) {
+      flushMultiline()
+      const rest = trimmed.slice(2)
+      currentNode = {}
+      nodes.push(currentNode)
+      if (rest.includes(':')) {
+        const [key, ...valueParts] = rest.split(':')
+        const value = valueParts.join(':').trim()
+        if (value === '|') {
+          multilineKey = key.trim()
+          multilineBuffer = []
+        } else {
+          currentNode[key.trim()] = coerceValue(value)
+        }
+      }
+      continue
+    }
+
+    if (!currentNode) continue
+
+    if (multilineKey) {
+      if (line.startsWith('    ') || line.startsWith('  ')) {
+        multilineBuffer.push(line.trimStart())
+        continue
+      } else {
+        flushMultiline()
+      }
+    }
+
+    const colonIndex = trimmed.indexOf(':')
+    if (colonIndex === -1) continue
+    const key = trimmed.slice(0, colonIndex).trim()
+    let value = trimmed.slice(colonIndex + 1).trim()
+    if (value === '|') {
+      multilineKey = key
+      multilineBuffer = []
+      continue
+    }
+    if (value === '') {
+      currentNode[key] = ''
+    } else {
+      currentNode[key] = coerceValue(value)
+    }
+  }
+
+  flushMultiline()
+  return { nodes }
 }
