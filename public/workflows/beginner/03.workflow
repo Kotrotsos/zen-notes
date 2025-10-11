@@ -2,11 +2,22 @@
 name: Sentiment Analysis
 category: Analysis
 difficulty: beginner
-tags: [sentiment, analysis, json]
-description: Analyzes sentiment and returns structured JSON output
+tags: [sentiment, analysis, json, csv]
+description: Analyzes sentiment and returns structured JSON output (works with plain text or CSV data)
 use_cases: ["Customer feedback", "Review analysis", "Social media monitoring"]
 ---
 nodes:
+  - id: prepare
+    type: func
+    expr: |
+      // For CSV mode, combine all row values into text
+      // For plain text mode, use chunk as-is
+      let text = chunk
+      if (row) {
+        text = Object.values(row).filter(v => v && String(v).trim()).join(' ')
+      }
+      return { text: text }
+
   - id: analyze
     type: prompt
     prompt: |
@@ -15,7 +26,7 @@ nodes:
       - score: a number between 0 and 1 (0=very negative, 1=very positive)
       - reason: brief explanation
 
-      Text: {{ chunk }}
+      Text: {{ text }}
     output: sentiment_result
     expect: json
     model: gpt-4.1
