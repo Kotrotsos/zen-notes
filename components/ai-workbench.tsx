@@ -10,6 +10,7 @@ import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from "@
 import { Label } from "@/components/ui/label"
 import { Slider } from "@/components/ui/slider"
 import { parseCsv, isValidCsv } from "@/lib/csv"
+import { expandReferences, hasReferences } from "@/lib/document-references"
 import WorkflowDropdown from '@/components/workflow-dropdown'
 import WorkflowBrowser from '@/components/workflow-browser'
 import WorkflowStudio from '@/components/workflow-studio'
@@ -72,6 +73,7 @@ interface AIWorkbenchProps {
   onSaveWorkflow?: (name: string, content: string, folderPath?: string, metadata?: WorkflowMetadata) => void
   onDeleteWorkflow?: (id: string) => void
   selectedWorkflowId?: string
+  allTabs: Array<{ id: string; name: string; content: string; folderPath?: string }>
 }
 
 type SeparatorType = "none" | "newline" | "blank-line" | "word" | "characters" | "custom"
@@ -84,7 +86,7 @@ interface ChunkResult {
   error?: string
 }
 
-export default function AIWorkbench({ activeTabContent, activeTabName, onClose, onCreateNewTab, onAppendToTab, availablePrompts = [], onSavePrompt, selectedPromptId, onActivityChange, availableWorkflows, onSaveWorkflow, onDeleteWorkflow, selectedWorkflowId }: AIWorkbenchProps) {
+export default function AIWorkbench({ activeTabContent, activeTabName, onClose, onCreateNewTab, onAppendToTab, availablePrompts = [], onSavePrompt, selectedPromptId, onActivityChange, availableWorkflows, onSaveWorkflow, onDeleteWorkflow, selectedWorkflowId, allTabs }: AIWorkbenchProps) {
   // Settings
   const [model, setModel] = useState("gpt-4.1")
   const [prompt, setPrompt] = useState("Summarize the following text:")
@@ -117,6 +119,9 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
   const [isCsvMode, setIsCsvMode] = useState(false)
   const [csvHeaders, setCsvHeaders] = useState<string[]>([])
   const [csvRowLimit, setCsvRowLimit] = useState<number>(0) // 0 = no limit
+
+  // Document references
+  const [processImports, setProcessImports] = useState(false)
 
   // Processing
   const [isProcessing, setIsProcessing] = useState(false)
@@ -184,9 +189,15 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
   const createChunks = (content: string): string[] => {
     if (!content) return []
 
+    // Expand document references if enabled
+    let processedContent = content
+    if (processImports && hasReferences(content)) {
+      processedContent = expandReferences(content, allTabs)
+    }
+
     // CSV mode: each row is a chunk
     if (isCsvMode) {
-      const { rows } = parseCsv(content)
+      const { rows } = parseCsv(processedContent)
       const limitedRows = csvRowLimit > 0 ? rows.slice(0, csvRowLimit) : rows
 
       // For CSV, we'll return serialized row objects as strings
@@ -198,16 +209,16 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
 
     switch (separatorType) {
       case "none":
-        parts = [content]
+        parts = [processedContent]
         break
       case "newline":
-        parts = content.split("\n")
+        parts = processedContent.split("\n")
         break
       case "blank-line":
-        parts = content.split(/\n\s*\n/)
+        parts = processedContent.split(/\n\s*\n/)
         break
       case "word":
-        const words = content.split(/\s+/)
+        const words = processedContent.split(/\s+/)
         parts = []
         for (let i = 0; i < words.length; i += wordCount) {
           parts.push(words.slice(i, i + wordCount).join(" "))
@@ -215,19 +226,19 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
         break
       case "characters":
         parts = []
-        for (let i = 0; i < content.length; i += charCount) {
-          parts.push(content.slice(i, i + charCount))
+        for (let i = 0; i < processedContent.length; i += charCount) {
+          parts.push(processedContent.slice(i, i + charCount))
         }
         break
       case "custom":
         if (customSeparator) {
-          parts = content.split(customSeparator)
+          parts = processedContent.split(customSeparator)
         } else {
-          parts = [content]
+          parts = [processedContent]
         }
         break
       default:
-        parts = [content]
+        parts = [processedContent]
     }
 
     return parts.filter(p => p.trim().length > 0)
@@ -734,7 +745,7 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
   }, [isDragging])
 
   // Precompute chunks to avoid re-parsing on every keystroke
-  const memoChunks = useMemo(() => createChunks(activeTabContent), [activeTabContent, isCsvMode, csvRowLimit, separatorType, customSeparator, wordCount, charCount])
+  const memoChunks = useMemo(() => createChunks(activeTabContent), [activeTabContent, isCsvMode, csvRowLimit, separatorType, customSeparator, wordCount, charCount, processImports, allTabs])
   const largeData = useMemo(() => {
     const chars = activeTabContent?.length || 0
     const count = memoChunks.length
@@ -1236,6 +1247,23 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
                 min={0}
                 placeholder="0 for all rows"
               />
+            </div>
+          )}
+
+          {hasReferences(activeTabContent) && (
+            <div className="space-y-2 p-3 bg-purple-50 dark:bg-purple-950 rounded border border-purple-200 dark:border-purple-800">
+              <label className="flex items-center gap-2 text-xs font-semibold text-purple-900 dark:text-purple-100">
+                <input
+                  type="checkbox"
+                  checked={processImports}
+                  onChange={(e) => setProcessImports(e.target.checked)}
+                  className="w-3 h-3"
+                />
+                <span>Also process document references (@-mentions)</span>
+              </label>
+              <p className="text-xs text-purple-700 dark:text-purple-300">
+                When enabled, all @[document] references will be expanded with their content before processing.
+              </p>
             </div>
           )}
 

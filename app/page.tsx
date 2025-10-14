@@ -36,6 +36,8 @@ import {
   Zap,
   Sparkles,
   Loader2,
+  FileInput,
+  Link2,
 } from "lucide-react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
@@ -47,6 +49,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import TableView from "@/components/table-view"
 import AIWorkbench from "@/components/ai-workbench"
 import { parseCsv, stringifyCsv, isValidCsv } from "@/lib/csv"
+import { createReferenceTag, hasReferences, expandReferences } from "@/lib/document-references"
 import { Workflow, WorkflowMetadata } from '@/lib/workflow-types'
 import { fetchBuiltInWorkflows, parseWorkflowFile } from '@/lib/workflow-service'
 import { FileCode } from 'lucide-react'
@@ -248,6 +251,7 @@ export default function ZenNotes() {
   const [showMarkdownPreview, setShowMarkdownPreview] = useState(
     () => (typeof initialUI.showMarkdownPreview === "boolean" ? initialUI.showMarkdownPreview : false),
   )
+  const [showExpandedView, setShowExpandedView] = useState(false)
   const [splitView, setSplitView] = useState(
     () => (typeof initialUI.splitView === "boolean" ? initialUI.splitView : false),
   )
@@ -306,6 +310,7 @@ export default function ZenNotes() {
     showGutter: true,
   })
   const editorRef = useRef(null)
+  const tabsRef = useRef<Tab[]>([])
   const blockDecorationsRef = useRef<any>(null)
   const blockSelectedDecorationsRef = useRef<any>(null)
   const lastBlockRangeRef = useRef<{ start: number; end: number } | null>(null)
@@ -1526,7 +1531,7 @@ function transform(input, context) {
           const tab = tabs.find((t) => t.id === child.tabId)
           if (tab) {
             items.push({
-              id: child.id,
+              id: tab.id, // Use tab.id instead of child.id so references work correctly
               name: tab.name,
               type: "file",
               path: `${currentPath}/${tab.name}`,
@@ -1576,6 +1581,9 @@ function transform(input, context) {
     return () => { mounted = false }
   }, [])
 
+  // Keep tabsRef updated for hover provider
+  tabsRef.current = tabs
+
   // Update custom workflows from tabs (only when workflow tab IDs/names change, not content)
   const workflowTabsRef = useRef(tabs)
   workflowTabsRef.current = tabs
@@ -1586,6 +1594,20 @@ function transform(input, context) {
       .map(t => `${t.id}:${t.name}`)
       .join(',')
   }, [tabs])
+
+  // Compute display content - either original or with references expanded
+  const displayContent = useMemo(() => {
+    const content = activeTab?.content || ""
+    if (showExpandedView && hasReferences(content)) {
+      try {
+        return expandReferences(content, tabs)
+      } catch (error) {
+        console.error("Error expanding references:", error)
+        return content
+      }
+    }
+    return content
+  }, [activeTab?.content, showExpandedView, tabs])
 
   useEffect(() => {
     const customWorkflows: Workflow[] = []
@@ -1985,6 +2007,51 @@ function transform(input, context) {
           },
         })
       }
+
+      // Register hover provider for document references
+      monaco.languages.registerHoverProvider('markdown', {
+        provideHover: (model: any, position: any) => {
+          const line = model.getLineContent(position.lineNumber)
+          const regex = /@\[([^\]]+):(\w+)\]/g
+          let match
+
+          while ((match = regex.exec(line)) !== null) {
+            const startCol = match.index + 1
+            const endCol = match.index + match[0].length + 1
+
+            if (position.column >= startCol && position.column <= endCol) {
+              const tabId = match[1]
+              const displayMode = match[2]
+              const referencedTab = tabsRef.current.find(t => t.id === tabId)
+
+              if (referencedTab) {
+                const content = referencedTab.content || ''
+                const preview = displayMode === 'full'
+                  ? content.substring(0, 200)
+                  : displayMode === 'paragraph'
+                  ? content.split(/\n\s*\n/)[0].substring(0, 200)
+                  : `[@${referencedTab.name}]`
+
+                return {
+                  contents: [
+                    { value: `**Document:** ${referencedTab.name}` },
+                    { value: `**Mode:** ${displayMode}` },
+                    { value: `**Preview:**\n\`\`\`\n${preview}${content.length > 200 ? '...' : ''}\n\`\`\`` }
+                  ]
+                }
+              } else {
+                return {
+                  contents: [
+                    { value: `**Missing document:** ${tabId}` }
+                  ]
+                }
+              }
+            }
+          }
+
+          return null
+        }
+      })
 
       return () => {
         try {
@@ -3017,6 +3084,17 @@ function transform(input, context) {
               </button>
             )
           )}
+          {activeTab && hasReferences(activeTab.content || '') && (
+            <button
+              onClick={() => {
+                setShowExpandedView(!showExpandedView)
+              }}
+              className={`p-2 hover:bg-muted/40 rounded ${showExpandedView ? "bg-muted" : ""}`}
+              title="Show Expanded View (with references)"
+            >
+              <FileInput size={16} />
+            </button>
+          )}
           <button
             onClick={() => {
               setShowWorkbench(!showWorkbench)
@@ -3105,7 +3183,15 @@ function transform(input, context) {
             className={`${splitView || showCopilot || showWorkbench || showAIWorkbench ? "" : "w-full"} h-full relative flex flex-col min-h-0`}
             style={splitView || showCopilot || showWorkbench || showAIWorkbench ? { width: `${splitRatio * 100}%` } : {}}
           >
-            <div className="flex-1 pt-4">
+            {showExpandedView && (
+              <div className="bg-blue-50 dark:bg-blue-950 border-b border-blue-200 dark:border-blue-800 px-4 py-2 flex items-center gap-2">
+                <FileInput size={14} className="text-blue-600 dark:text-blue-400" />
+                <span className="text-xs font-medium text-blue-900 dark:text-blue-100">
+                  Expanded View - Document references have been replaced with their content (Read-only)
+                </span>
+              </div>
+            )}
+            <div className={`flex-1 ${showExpandedView ? 'pt-0' : 'pt-4'}`}>
               {activeTab?.view === 'table' ? (
                 <TableView
                   headers={(() => { const { headers } = parseCsv(activeTab?.content || ''); return headers })()}
@@ -3122,13 +3208,14 @@ function transform(input, context) {
                   width="100%"
                   language="markdown"
                   theme={resolvedTheme === "dark" ? "custom-vs-dark" : "custom-vs"}
-                  value={activeTab?.content || ""}
-                  onChange={handleChange}
+                  value={displayContent}
+                  onChange={showExpandedView ? undefined : handleChange}
                   onMount={handleEditorDidMount}
                   options={{
                     automaticLayout: false,
                     scrollbar: { alwaysConsumeMouseWheel: true },
                     padding: { left: editorSettings.showGutter ? (editorSettings.fullWidth ? 8 : 0) : 16, bottom: 12 },
+                    readOnly: showExpandedView,
                   }}
                 />
               )}
@@ -4337,6 +4424,7 @@ function transform(input, context) {
 
                     setTabs((prev) => prev.filter((t) => t.id !== id))
                   }}
+                  allTabs={tabs}
                 />
               </div>
             </>
@@ -5114,16 +5202,22 @@ function transform(input, context) {
                   const model = editor.getModel()
                   const position = editor.getPosition()
 
-                  if (model && position && monaco) {
+                  // Store the start position in a local variable to prevent null reference issues
+                  const startPos = atReferenceStartPos.current
+
+                  if (model && position && monaco && startPos) {
                     // Replace from @ to current cursor position with the selected item
                     const range = new monaco.Range(
-                      atReferenceStartPos.current.lineNumber,
-                      atReferenceStartPos.current.column,
+                      startPos.lineNumber,
+                      startPos.column,
                       position.lineNumber,
                       position.column,
                     )
 
-                    const insertText = item.type === "special" ? item.name : `@${item.name}`
+                    // For special items, use old format; for tabs, use new reference format
+                    const insertText = item.type === "special"
+                      ? item.name
+                      : createReferenceTag(item.id, "paragraph") // Use paragraph mode as default
 
                     editor.executeEdits("at-reference", [
                       {
@@ -5134,8 +5228,8 @@ function transform(input, context) {
 
                     // Position cursor after the inserted text
                     const newPosition = new monaco.Position(
-                      atReferenceStartPos.current.lineNumber,
-                      atReferenceStartPos.current.column + insertText.length,
+                      startPos.lineNumber,
+                      startPos.column + insertText.length,
                     )
                     editor.setPosition(newPosition)
                     editor.focus()
