@@ -77,3 +77,11 @@ Note: `package-lock.json` is present; use npm to avoid lockfile drift. Builds cu
   - **Unsaved Changes**: Smart tracking with warnings before loading new workflow.
   - **Integration**: Follows prompt system pattern - parent (`app/page.tsx`) handles file I/O, `AIWorkbench` handles UI/state.
   - **Utilities**: `lib/workflow-service.ts` (parsing, building, loading), `lib/workflow-types.ts` (TypeScript types).
+- Workflow Studio enhancements:
+  - **Test Results Panel**: Collapsible panel at the bottom of Studio displays test run results including logs and context data for each chunk.
+  - **Editable Node IDs**: Node identifiers can now be edited directly in the configuration panel, with duplicate detection and validation.
+  - **Live Test Integration**: Test button executes workflow with limited chunks and displays results in real-time within the Studio interface.
+  - **Results Display**: Shows logs section (execution messages) and results table (context data for each chunk processed) in an expandable panel.
+  - **Resizable Modal**: Studio modal can be resized by dragging edges (min 800x600px) for flexible workspace layout.
+  - **Fullscreen Mode**: Toggle fullscreen via button in header for maximum workspace when building complex workflows.
+  - **Expandable Text Areas**: All prompt text areas (JavaScript Expression, Prompt Template, System Prompt) include expand button to toggle between compact (h-32/h-48) and large (h-96) sizes for easier editing of long content.

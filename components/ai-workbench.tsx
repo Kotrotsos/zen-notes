@@ -2,7 +2,7 @@
 
 import React, { useState, useRef, useEffect, useMemo } from "react"
 import { Editor } from "@monaco-editor/react"
-import { X, Play, Square, ChevronDown, ChevronUp, Zap, FilePlus, FileText, Download, BookOpen, Save, Maximize2 } from "lucide-react"
+import { X, Play, Square, ChevronDown, ChevronUp, Zap, FilePlus, FileText, Download, BookOpen, Save, Maximize2, Boxes } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
@@ -12,6 +12,7 @@ import { Slider } from "@/components/ui/slider"
 import { parseCsv, isValidCsv } from "@/lib/csv"
 import WorkflowDropdown from '@/components/workflow-dropdown'
 import WorkflowBrowser from '@/components/workflow-browser'
+import WorkflowStudio from '@/components/workflow-studio'
 import { Workflow, WorkflowMetadata } from '@/lib/workflow-types'
 import { parseWorkflowFile, buildWorkflowFile } from '@/lib/workflow-service'
 
@@ -130,6 +131,7 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
   const [currentWorkflowId, setCurrentWorkflowId] = useState<string | null>(null)
   const [isWorkflowModified, setIsWorkflowModified] = useState(false)
   const [showWorkflowBrowser, setShowWorkflowBrowser] = useState(false)
+  const [showWorkflowStudio, setShowWorkflowStudio] = useState(false)
   const [workflowFavorites, setWorkflowFavorites] = useState<string[]>([])
   const [workflowRecent, setWorkflowRecent] = useState<string[]>([])
   const [showWorkflowSave, setShowWorkflowSave] = useState(false)
@@ -146,6 +148,7 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
   const [workflowIncludeHeaders, setWorkflowIncludeHeaders] = useState(true)
   const [showSingleField, setShowSingleField] = useState(false)
   const [singleFieldName, setSingleFieldName] = useState("result")
+  const [hideKeys, setHideKeys] = useState(false)
   const promptVars = useMemo(() => {
     const vars = new Set<string>()
     if (!prompt) return vars
@@ -1020,6 +1023,156 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
     }
   }
 
+  // Studio handlers
+  const handleStudioSave = (yaml: string) => {
+    setWorkflowScript(yaml)
+    setShowWorkflowStudio(false)
+    setIsWorkflowModified(true)
+  }
+
+  const handleStudioTest = async (yaml: string, chunkLimit: number): Promise<{
+    logs: string[]
+    results: Array<{ index: number; context: Record<string, any> }>
+    error?: string
+  }> => {
+    // Save the YAML to state
+    setWorkflowScript(yaml)
+
+    // Create a limited version of chunks
+    const testChunks = memoChunks.slice(0, chunkLimit)
+
+    // Reset state
+    setWorkflowError(null)
+    setWorkflowLogs([])
+    setWorkflowResults([])
+    setIsAdvancedProcessing(true)
+    try {
+      onActivityChange?.(true)
+    } catch {}
+
+    try {
+      const parsed = parseWorkflowScript(yaml)
+      const nodes: WorkflowNode[] = Array.isArray(parsed?.nodes) ? parsed.nodes : []
+      if (!nodes.length) {
+        throw new Error("Workflow script must define a 'nodes' array")
+      }
+
+      const logs: string[] = []
+      const results: Array<{ index: number; context: Record<string, any> }> = []
+
+      for (let i = 0; i < testChunks.length; i++) {
+        const chunkText = testChunks[i]
+        let rowData: any = null
+        if (isCsvMode) {
+          try {
+            rowData = chunkText ? JSON.parse(chunkText) : null
+          } catch {
+            rowData = null
+          }
+        }
+
+        const context: Record<string, any> = {
+          chunk: chunkText,
+          row: rowData,
+          data: rowData,
+          index: i,
+        }
+
+        const helpers = {
+          template: (tpl: string) => renderTemplate(tpl, context),
+          log: (msg: string) => logs.push(`[${i}] ${msg}`),
+        }
+
+        let skipRow = false
+
+        for (const node of nodes) {
+          const type = (node.type || '').toLowerCase()
+          const nodeId = node.id || `${type || 'node'}_${i}`
+
+          if (type === 'func') {
+            const expr = node.expr || node.code
+            if (!expr) continue
+            try {
+              const fn = new Function('context', 'chunk', 'row', 'helpers', expr)
+              const result = await Promise.resolve(fn(context, chunkText, rowData, helpers))
+              if (result && typeof result === 'object') {
+                if (result.skip) {
+                  skipRow = true
+                  logs.push(`[${i}] func ${nodeId} skipped row`)
+                  break
+                }
+                Object.assign(context, result)
+              }
+            } catch (err: any) {
+              logs.push(`[${i}] func ${nodeId} error: ${err?.message || err}`)
+              skipRow = true
+              break
+            }
+          } else if (type === 'prompt') {
+            const promptTemplate = node.prompt || ''
+            if (!promptTemplate) {
+              logs.push(`[${i}] prompt ${nodeId} missing prompt text`)
+              skipRow = true
+              break
+            }
+            const systemPrompt = renderTemplate(node.system || DEFAULT_ADVANCED_SYSTEM_PROMPT, context)
+            const promptText = renderTemplate(promptTemplate, context)
+            const appendChunk = node.append_chunk ?? false
+            try {
+              const responseText = await requestPromptResponse({
+                promptText,
+                chunkText: appendChunk ? chunkText : '',
+                includeChunkValue: appendChunk,
+                modelOverride: node.model,
+                temperatureOverride: node.temperature,
+                maxTokensOverride: node.maxTokens ?? node.max_tokens,
+                systemPrompt,
+              })
+              const key = node.output_key || node.output || nodeId
+              if ((node.expect || '').toLowerCase() === 'json') {
+                try {
+                  context[key] = JSON.parse(responseText)
+                } catch {
+                  logs.push(`[${i}] prompt ${nodeId} returned invalid JSON, storing raw text`)
+                  context[key] = responseText
+                }
+              } else {
+                context[key] = responseText
+              }
+              helpers.log(`prompt ${nodeId} complete`)
+            } catch (err: any) {
+              logs.push(`[${i}] prompt ${nodeId} error: ${err?.message || err}`)
+              skipRow = true
+              break
+            }
+          } else if (type === 'print') {
+            const message = renderTemplate(node.message || '', context)
+            logs.push(`[${i}] ${message}`)
+          } else {
+            logs.push(`[${i}] Unknown node type: ${node.type}`)
+          }
+        }
+
+        if (!skipRow) {
+          const snapshot = { ...context, chunk: chunkText }
+          results.push({ index: i, context: snapshot })
+        }
+      }
+
+      setWorkflowLogs(logs)
+      setWorkflowResults(results)
+
+      return { logs, results }
+    } catch (err: any) {
+      const errorMessage = err?.message || 'Workflow test failed'
+      setWorkflowError(errorMessage)
+      return { logs: [], results: [], error: errorMessage }
+    } finally {
+      setIsAdvancedProcessing(false)
+      try { onActivityChange?.(false) } catch {}
+    }
+  }
+
   return (
     <div className={`h-full bg-background border-l flex flex-col ${isDragging ? 'select-none' : ''}`}>
       {/* Header */}
@@ -1347,6 +1500,10 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
                   <Save size={14} className="mr-1" />
                   Save to Project
                 </Button>
+                <Button variant="secondary" size="sm" onClick={() => setShowWorkflowStudio(true)} className="bg-blue-50 hover:bg-blue-100 border-blue-200">
+                  <Boxes size={14} className="mr-1" />
+                  Studio (Beta)
+                </Button>
               </div>
 
               {isWorkflowModified && (
@@ -1613,12 +1770,15 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
                 <div className="flex items-center justify-between mb-2">
                   <h4 className="text-xs font-semibold text-muted-foreground uppercase">Results</h4>
                   {workflowResults.length > 0 && (
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-3">
                       <label className="flex items-center gap-1.5 text-xs">
                         <input
                           type="checkbox"
                           checked={showSingleField}
-                          onChange={(e) => setShowSingleField(e.target.checked)}
+                          onChange={(e) => {
+                            setShowSingleField(e.target.checked)
+                            if (e.target.checked) setHideKeys(false)
+                          }}
                           className="w-3 h-3"
                         />
                         <span>Show only field:</span>
@@ -1630,6 +1790,18 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
                         disabled={!showSingleField}
                         className="h-6 w-24 text-xs px-2"
                       />
+                      <label className="flex items-center gap-1.5 text-xs">
+                        <input
+                          type="checkbox"
+                          checked={hideKeys}
+                          onChange={(e) => {
+                            setHideKeys(e.target.checked)
+                            if (e.target.checked) setShowSingleField(false)
+                          }}
+                          className="w-3 h-3"
+                        />
+                        <span>Show values only</span>
+                      </label>
                     </div>
                   )}
                 </div>
@@ -1647,22 +1819,35 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
                         </tr>
                       </thead>
                       <tbody>
-                        {workflowResults.map((result) => (
-                          <tr key={result.index} className="border-t border-border/50 align-top">
-                            <td className="p-2 font-mono">{result.index + 1}</td>
-                            <td className="p-2">
-                              <pre className="text-[11px] font-mono whitespace-pre-wrap bg-muted/40 rounded p-2">
-                                {showSingleField
-                                  ? (result.context[singleFieldName] !== undefined
-                                      ? (typeof result.context[singleFieldName] === 'object'
-                                          ? JSON.stringify(result.context[singleFieldName], null, 2)
-                                          : String(result.context[singleFieldName]))
-                                      : `Field "${singleFieldName}" not found`)
-                                  : JSON.stringify(result.context, null, 2)}
-                              </pre>
-                            </td>
-                          </tr>
-                        ))}
+                        {workflowResults.map((result) => {
+                          let displayContent: string
+                          if (showSingleField) {
+                            if (result.context[singleFieldName] !== undefined) {
+                              const value = result.context[singleFieldName]
+                              displayContent = typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value)
+                            } else {
+                              displayContent = `Field "${singleFieldName}" not found`
+                            }
+                          } else if (hideKeys) {
+                            const values = Object.entries(result.context)
+                              .filter(([key]) => key !== 'chunk' && key !== 'row' && key !== 'data' && key !== 'index')
+                              .map(([_, value]) => typeof value === 'string' ? value : JSON.stringify(value, null, 2))
+                            displayContent = values.join('\n')
+                          } else {
+                            displayContent = JSON.stringify(result.context, null, 2)
+                          }
+
+                          return (
+                            <tr key={result.index} className="border-t border-border/50 align-top">
+                              <td className="p-2 font-mono">{result.index + 1}</td>
+                              <td className="p-2">
+                                <pre className="text-[11px] font-mono whitespace-pre-wrap bg-muted/40 rounded p-2">
+                                  {displayContent}
+                                </pre>
+                              </td>
+                            </tr>
+                          )
+                        })}
                       </tbody>
                     </table>
 
@@ -1713,6 +1898,15 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
           onLoad={handleLoadWorkflow}
           onToggleFavorite={handleToggleWorkflowFavorite}
           onClose={() => setShowWorkflowBrowser(false)}
+        />
+      )}
+
+      {showWorkflowStudio && (
+        <WorkflowStudio
+          initialYaml={workflowScript}
+          onClose={() => setShowWorkflowStudio(false)}
+          onSave={handleStudioSave}
+          onTest={handleStudioTest}
         />
       )}
     </div>

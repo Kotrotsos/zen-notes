@@ -79,12 +79,12 @@ export function isValidCsv(text: string): boolean {
     // Need at least 2 columns
     if (headers.length < 2) return false
 
-    // Need at least 2 data rows (not counting header)
-    if (rows.length < 2) return false
+    // Need at least 1 data row (not counting header)
+    if (rows.length < 1) return false
 
     // Check if delimiter appears consistently across rows
     const lines = text.split(/\r?\n/).filter(l => l.trim())
-    if (lines.length < 3) return false // Need at least header + 2 data rows
+    if (lines.length < 2) return false // Need at least header + 1 data row
 
     // Count delimiter occurrences in each line
     const delimCounts = lines.map(line => {
