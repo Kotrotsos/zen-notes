@@ -4542,7 +4542,9 @@ function transform(input, context) {
       {showStartMenu && (
         <div
           data-start-menu
-          className="fixed bottom-12 left-0 bg-background border border-border rounded-tr-lg shadow-lg z-50 min-w-48 animate-in slide-in-from-bottom-2 duration-200"
+          className={`fixed bottom-8 bg-background border border-border rounded-tr-lg shadow-lg z-50 min-w-48 animate-in slide-in-from-bottom-2 duration-200 ${
+            pinnedExplorer ? 'left-64' : 'left-0'
+          }`}
         >
           <div className="py-2">
             <button
