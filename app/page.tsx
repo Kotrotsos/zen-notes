@@ -252,6 +252,12 @@ export default function ZenNotes() {
     () => (typeof initialUI.showMarkdownPreview === "boolean" ? initialUI.showMarkdownPreview : false),
   )
   const [showExpandedView, setShowExpandedView] = useState(false)
+
+  // Reset expanded view when switching tabs
+  useEffect(() => {
+    setShowExpandedView(false)
+  }, [activeTabId])
+
   const [splitView, setSplitView] = useState(
     () => (typeof initialUI.splitView === "boolean" ? initialUI.splitView : false),
   )
@@ -313,6 +319,7 @@ export default function ZenNotes() {
   const tabsRef = useRef<Tab[]>([])
   const blockDecorationsRef = useRef<any>(null)
   const blockSelectedDecorationsRef = useRef<any>(null)
+  const referenceDecorationsRef = useRef<any>(null)
   const lastBlockRangeRef = useRef<{ start: number; end: number } | null>(null)
   const hoverTimerRef = useRef<number | null>(null)
   const { theme, resolvedTheme, setTheme } = useTheme()
@@ -378,6 +385,8 @@ export default function ZenNotes() {
   const [pinnedExplorer, setPinnedExplorer] = useState(
     () => (typeof initialUI.pinnedExplorer === "boolean" ? initialUI.pinnedExplorer : false),
   )
+  const [explorerWidth, setExplorerWidth] = useState(256) // Default 256px (w-64)
+  const [isResizingExplorer, setIsResizingExplorer] = useState(false)
 
   const [previewSettings, setPreviewSettings] = useState<PreviewSettings>({
     style: "classic",
@@ -1640,6 +1649,7 @@ function transform(input, context) {
       editorRef.current = editor
       blockDecorationsRef.current = editor.createDecorationsCollection()
       blockSelectedDecorationsRef.current = editor.createDecorationsCollection()
+      referenceDecorationsRef.current = editor.createDecorationsCollection()
 
       // Focus the editor immediately
       editor.focus()
@@ -2007,6 +2017,55 @@ function transform(input, context) {
           },
         })
       }
+
+      // Function to update reference decorations (show doc names instead of IDs)
+      const updateReferenceDecorations = () => {
+        const model = editor.getModel()
+        if (!model || !referenceDecorationsRef.current) return
+
+        const content = model.getValue()
+        const regex = /@\[([^\]]+):(\w+)\]/g
+        const decorations: any[] = []
+        let match
+
+        const lines = content.split('\n')
+        lines.forEach((line, lineIndex) => {
+          const lineNumber = lineIndex + 1
+          let lineMatch
+          const lineRegex = /@\[([^\]]+):(\w+)\]/g
+
+          while ((lineMatch = lineRegex.exec(line)) !== null) {
+            const tabId = lineMatch[1]
+            const displayMode = lineMatch[2]
+            const tab = tabsRef.current.find(t => t.id === tabId)
+
+            if (tab) {
+              const startColumn = lineMatch.index + 1
+              const endColumn = startColumn + lineMatch[0].length
+
+              decorations.push({
+                range: new monaco.Range(lineNumber, startColumn, lineNumber, endColumn),
+                options: {
+                  afterContentClassName: 'reference-decoration',
+                  after: {
+                    content: `@${tab.name}:${displayMode}`,
+                    inlineClassName: 'reference-badge'
+                  },
+                  beforeContentClassName: 'reference-hide'
+                }
+              })
+            }
+          }
+        })
+
+        referenceDecorationsRef.current.set(decorations)
+      }
+
+      // Call it initially and on content change
+      updateReferenceDecorations()
+      editor.onDidChangeModelContent(() => {
+        updateReferenceDecorations()
+      })
 
       // Register hover provider for document references
       monaco.languages.registerHoverProvider('markdown', {
@@ -2376,6 +2435,38 @@ function transform(input, context) {
       }
     }
   }, [isDragging])
+
+  // Explorer resize handlers
+  const handleExplorerResizeStart = (e: React.MouseEvent) => {
+    e.preventDefault()
+    setIsResizingExplorer(true)
+  }
+
+  const handleExplorerResizeMove = (e: MouseEvent) => {
+    if (!isResizingExplorer) return
+    const newWidth = Math.max(200, Math.min(600, e.clientX))
+    setExplorerWidth(newWidth)
+  }
+
+  const handleExplorerResizeEnd = () => {
+    setIsResizingExplorer(false)
+  }
+
+  useEffect(() => {
+    if (isResizingExplorer) {
+      document.addEventListener("mousemove", handleExplorerResizeMove)
+      document.addEventListener("mouseup", handleExplorerResizeEnd)
+      document.body.style.cursor = "col-resize"
+      document.body.style.userSelect = "none"
+
+      return () => {
+        document.removeEventListener("mousemove", handleExplorerResizeMove)
+        document.removeEventListener("mouseup", handleExplorerResizeEnd)
+        document.body.style.cursor = ""
+        document.body.style.userSelect = ""
+      }
+    }
+  }, [isResizingExplorer])
 
   const handleExplorerMouseEnter = () => {
     if (!pinnedExplorer) {
@@ -2885,9 +2976,10 @@ function transform(input, context) {
       {/* File Explorer Drawer */}
       <div
         data-explorer
-        className={`fixed inset-y-0 left-0 w-64 bg-background border-r border-border z-40 transform transition-transform duration-300 ease-out ${
+        className={`fixed inset-y-0 left-0 bg-background border-r border-border z-40 transform transition-transform duration-300 ease-out ${
           showFileExplorer || pinnedExplorer ? "translate-x-0" : "-translate-x-full"
         }`}
+        style={{ width: `${explorerWidth}px` }}
         onMouseEnter={handleExplorerMouseEnter}
         onMouseLeave={handleExplorerMouseLeave}
       >
@@ -2985,11 +3077,22 @@ function transform(input, context) {
             />
           </div>
         </div>
+
+        {/* Resize Handle */}
+        <div
+          className={`absolute top-0 right-0 w-1 h-full cursor-col-resize group hover:bg-blue-500/50 ${
+            isResizingExplorer ? "bg-blue-500" : ""
+          }`}
+          onMouseDown={handleExplorerResizeStart}
+        >
+          <div className="absolute inset-y-0 right-0 w-px bg-border group-hover:bg-blue-500 transition-colors" />
+        </div>
       </div>
 
       {/* Tab Bar */}
       <div
-        className={`flex items-center justify-between border-b border-border bg-muted/20 transition-all duration-300 ${pinnedExplorer ? "ml-64" : "ml-0"}`}
+        className="flex items-center justify-between border-b border-border bg-muted/20 transition-all duration-300"
+        style={{ marginLeft: pinnedExplorer ? `${explorerWidth}px` : '0' }}
       >
         <div className="flex items-center">
           {tabs.filter((t) => t.isOpen !== false).map((tab) => (
@@ -3084,13 +3187,13 @@ function transform(input, context) {
               </button>
             )
           )}
-          {activeTab && hasReferences(activeTab.content || '') && (
+          {activeTab && (hasReferences(activeTab.content || '') || showExpandedView) && (
             <button
               onClick={() => {
                 setShowExpandedView(!showExpandedView)
               }}
-              className={`p-2 hover:bg-muted/40 rounded ${showExpandedView ? "bg-muted" : ""}`}
-              title="Show Expanded View (with references)"
+              className={`p-2 hover:bg-muted/40 rounded ${showExpandedView ? "bg-blue-500 text-white" : ""}`}
+              title={showExpandedView ? "Exit Expanded View" : "Show Expanded View (with references)"}
             >
               <FileInput size={16} />
             </button>
@@ -3171,7 +3274,8 @@ function transform(input, context) {
       {/* Editor and Split View */}
       {/* Adjust main content margin when explorer is pinned */}
       <div
-        className={`flex-1 flex flex-col transition-all duration-300 ${pinnedExplorer ? "ml-64" : "ml-0"} overflow-hidden`}
+        className="flex-1 flex flex-col transition-all duration-300 overflow-hidden"
+        style={{ marginLeft: pinnedExplorer ? `${explorerWidth}px` : '0' }}
       >
         <div
           ref={splitContainerRef}
@@ -5103,7 +5207,8 @@ function transform(input, context) {
 
       {/* Status Bar */}
       <div
-        className={`sticky bottom-0 h-8 border-t border-border bg-background px-0 py-0 flex justify-between items-center text-xs font-mono text-muted-foreground transition-all duration-300 ${pinnedExplorer ? "ml-64" : "ml-0"}`}
+        className="sticky bottom-0 h-8 border-t border-border bg-background px-0 py-0 flex justify-between items-center text-xs font-mono text-muted-foreground transition-all duration-300"
+        style={{ marginLeft: pinnedExplorer ? `${explorerWidth}px` : '0' }}
       >
         <div className="flex items-center gap-6 h-full">
           <button

@@ -123,3 +123,24 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Document reference decorations */
+.reference-hide {
+  opacity: 0.3;
+  font-size: 0.7em;
+}
+
+.reference-badge {
+  background-color: rgb(59 130 246 / 0.15);
+  color: rgb(37 99 235);
+  border-radius: 0.25rem;
+  padding: 0.125rem 0.375rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  margin-left: 0.25rem;
+}
+
+.dark .reference-badge {
+  background-color: rgb(59 130 246 / 0.25);
+  color: rgb(147 197 253);
+}
