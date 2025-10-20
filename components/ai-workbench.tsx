@@ -168,10 +168,20 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
   // Detect CSV on content change
   useEffect(() => {
     const isCSV = isValidCsv(activeTabContent)
+
+    // Debug logging
+    console.log('CSV Detection:', {
+      isCSV,
+      contentLength: activeTabContent.length,
+      firstLine: activeTabContent.split('\n')[0]?.substring(0, 100),
+      lineCount: activeTabContent.split('\n').length
+    })
+
     setIsCsvMode(isCSV)
 
     if (isCSV) {
       const { headers } = parseCsv(activeTabContent)
+      console.log('CSV Headers detected:', headers)
       setCsvHeaders(headers)
     } else {
       setCsvHeaders([])
@@ -609,9 +619,11 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
 
       const logs: string[] = []
       const results: Array<{ index: number; context: Record<string, any> }> = []
+      const BATCH_SIZE = 3 // Process 3 chunks concurrently (workflows have more API calls per chunk)
 
-      for (let i = 0; i < memoChunks.length; i++) {
-        const chunkText = memoChunks[i]
+      // Helper function to process a single chunk through the workflow
+      const processWorkflowChunk = async (chunkIndex: number) => {
+        const chunkText = memoChunks[chunkIndex]
         let rowData: any = null
         if (isCsvMode) {
           try {
@@ -625,19 +637,19 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
           chunk: chunkText,
           row: rowData,
           data: rowData,
-          index: i,
+          index: chunkIndex,
         }
 
         const helpers = {
           template: (tpl: string) => renderTemplate(tpl, context),
-          log: (msg: string) => logs.push(`[${i}] ${msg}`),
+          log: (msg: string) => logs.push(`[${chunkIndex}] ${msg}`),
         }
 
         let skipRow = false
 
         for (const node of nodes) {
           const type = (node.type || '').toLowerCase()
-          const nodeId = node.id || `${type || 'node'}_${i}`
+          const nodeId = node.id || `${type || 'node'}_${chunkIndex}`
 
           if (type === 'func') {
             const expr = node.expr || node.code
@@ -648,20 +660,20 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
               if (result && typeof result === 'object') {
                 if (result.skip) {
                   skipRow = true
-                  logs.push(`[${i}] func ${nodeId} skipped row`)
+                  logs.push(`[${chunkIndex}] func ${nodeId} skipped row`)
                   break
                 }
                 Object.assign(context, result)
               }
             } catch (err: any) {
-              logs.push(`[${i}] func ${nodeId} error: ${err?.message || err}`)
+              logs.push(`[${chunkIndex}] func ${nodeId} error: ${err?.message || err}`)
               skipRow = true
               break
             }
           } else if (type === 'prompt') {
             const promptTemplate = node.prompt || ''
             if (!promptTemplate) {
-              logs.push(`[${i}] prompt ${nodeId} missing prompt text`)
+              logs.push(`[${chunkIndex}] prompt ${nodeId} missing prompt text`)
               skipRow = true
               break
             }
@@ -683,7 +695,7 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
                 try {
                   context[key] = JSON.parse(responseText)
                 } catch {
-                  logs.push(`[${i}] prompt ${nodeId} returned invalid JSON, storing raw text`)
+                  logs.push(`[${chunkIndex}] prompt ${nodeId} returned invalid JSON, storing raw text`)
                   context[key] = responseText
                 }
               } else {
@@ -691,22 +703,40 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
               }
               helpers.log(`prompt ${nodeId} complete`)
             } catch (err: any) {
-              logs.push(`[${i}] prompt ${nodeId} error: ${err?.message || err}`)
+              logs.push(`[${chunkIndex}] prompt ${nodeId} error: ${err?.message || err}`)
               skipRow = true
               break
             }
           } else if (type === 'print') {
             const message = renderTemplate(node.message || '', context)
-            logs.push(`[${i}] ${message}`)
+            logs.push(`[${chunkIndex}] ${message}`)
           } else {
-            logs.push(`[${i}] Unknown node type: ${node.type}`)
+            logs.push(`[${chunkIndex}] Unknown node type: ${node.type}`)
           }
         }
 
         if (!skipRow) {
           const snapshot = { ...context, chunk: chunkText }
-          results.push({ index: i, context: snapshot })
+          return { index: chunkIndex, context: snapshot }
         }
+        return null
+      }
+
+      // Process chunks in parallel batches
+      for (let i = 0; i < memoChunks.length; i += BATCH_SIZE) {
+        const batch = Array.from(
+          { length: Math.min(BATCH_SIZE, memoChunks.length - i) },
+          (_, idx) => i + idx
+        )
+
+        const batchResults = await Promise.all(
+          batch.map(chunkIndex => processWorkflowChunk(chunkIndex))
+        )
+
+        // Add non-null results
+        batchResults.forEach(result => {
+          if (result) results.push(result)
+        })
       }
 
       setWorkflowLogs(logs)
@@ -754,9 +784,10 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
     return { over: overRows || overChars, count, chars }
   }, [activeTabContent, memoChunks])
 
-  // Process all chunks sequentially
+  // Process all chunks in parallel batches for better performance
   const handleRun = async () => {
     const chunksToProcess = memoChunks
+    const BATCH_SIZE = 5 // Process 5 chunks concurrently
 
     if (chunksToProcess.length === 0) {
       return
@@ -777,10 +808,22 @@ export default function AIWorkbench({ activeTabContent, activeTabName, onClose, 
 
     abortControllerRef.current = new AbortController()
 
-    for (let i = 0; i < chunksToProcess.length; i++) {
+    // Process chunks in parallel batches
+    for (let i = 0; i < chunksToProcess.length; i += BATCH_SIZE) {
       if (abortControllerRef.current.signal.aborted) break
+
+      const batch = chunksToProcess.slice(i, Math.min(i + BATCH_SIZE, chunksToProcess.length))
+      const batchIndices = Array.from({ length: batch.length }, (_, idx) => i + idx)
+
+      // Update UI to show we're processing this batch
       setCurrentChunkIndex(i)
-      await processChunk(chunksToProcess[i], i)
+
+      // Process batch in parallel
+      await Promise.all(
+        batch.map((chunk, batchIdx) =>
+          processChunk(chunk, batchIndices[batchIdx])
+        )
+      )
     }
 
     setIsProcessing(false)
