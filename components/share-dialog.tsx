@@ -96,7 +96,7 @@ export function ShareDialog({ open, onOpenChange, documentId, documentName }: Sh
 
     try {
       // Get all local data from IndexedDB
-      const dbName = 'zenNotesDB'
+      const dbName = 'ZenNotesDB'
       const request = indexedDB.open(dbName, 1)
 
       request.onsuccess = async (event) => {
