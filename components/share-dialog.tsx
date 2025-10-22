@@ -19,6 +19,7 @@ interface ShareDialogProps {
 export function ShareDialog({ open, onOpenChange, documentId, documentName }: ShareDialogProps) {
   const { user } = useAuth()
   const [loading, setLoading] = useState(false)
+  const [syncing, setSyncing] = useState(false)
   const [shareUrl, setShareUrl] = useState('')
   const [copied, setCopied] = useState(false)
   const [slugOptions, setSlugOptions] = useState<string[]>([])
@@ -85,7 +86,75 @@ export function ShareDialog({ open, onOpenChange, documentId, documentName }: Sh
     setShareUrl('')
     setCopied(false)
     setError('')
+    setSyncing(false)
     onOpenChange(false)
+  }
+
+  const handleSyncNow = async () => {
+    setSyncing(true)
+    setError('')
+
+    try {
+      // Get all local data from IndexedDB
+      const dbName = 'zenNotesDB'
+      const request = indexedDB.open(dbName, 1)
+
+      request.onsuccess = async (event) => {
+        const db = (event.target as IDBOpenDBRequest).result
+        const transaction = db.transaction(['appData'], 'readonly')
+        const store = transaction.objectStore('appData')
+        const getRequest = store.get('main')
+
+        getRequest.onsuccess = async () => {
+          const localData = getRequest.result
+
+          if (!localData) {
+            setError('No local data found to sync')
+            setSyncing(false)
+            return
+          }
+
+          // Sync to server
+          const response = await fetch('/api/sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              tabs: localData.tabs || [],
+              folders: localData.folderStructure || [],
+              settings: {
+                editorSettings: localData.editorSettings,
+                previewSettings: localData.previewSettings,
+                copilotSettings: localData.copilotSettings,
+                modelsSettings: localData.modelsSettings,
+                appPrefs: localData.appPrefs,
+              },
+            }),
+          })
+
+          const data = await response.json()
+
+          if (!response.ok) {
+            throw new Error(data.error || 'Sync failed')
+          }
+
+          // Reload the page to get fresh data with database IDs
+          window.location.reload()
+        }
+
+        getRequest.onerror = () => {
+          setError('Failed to read local data')
+          setSyncing(false)
+        }
+      }
+
+      request.onerror = () => {
+        setError('Failed to open local database')
+        setSyncing(false)
+      }
+    } catch (err: any) {
+      setError(err.message || 'Failed to sync data')
+      setSyncing(false)
+    }
   }
 
   return (
@@ -113,17 +182,28 @@ export function ShareDialog({ open, onOpenChange, documentId, documentName }: Sh
           </div>
         ) : isLocalDocument ? (
           <div className="space-y-4">
+            {error && (
+              <div className="p-3 text-sm bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 rounded">
+                {error}
+              </div>
+            )}
             <div className="flex items-start gap-3 p-4 bg-amber-50 dark:bg-amber-900/20 text-amber-800 dark:text-amber-200 rounded">
               <AlertCircle className="h-5 w-5 mt-0.5 shrink-0" />
               <div className="space-y-2">
                 <p className="text-sm font-medium">Document not synced</p>
                 <p className="text-sm">This document only exists locally. To share it, you need to sync your data to the cloud first.</p>
-                <p className="text-sm text-muted-foreground">Tip: Your data will automatically sync when you log in for the first time, or you can implement a manual sync button.</p>
+                <p className="text-sm text-muted-foreground">Click "Sync Now" to upload all your local data to the cloud. The page will reload after syncing.</p>
               </div>
             </div>
-            <Button onClick={handleClose} className="w-full">
-              Close
-            </Button>
+            <div className="flex gap-2">
+              <Button onClick={handleClose} variant="outline" className="flex-1">
+                Cancel
+              </Button>
+              <Button onClick={handleSyncNow} className="flex-1" disabled={syncing}>
+                {syncing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                {syncing ? 'Syncing...' : 'Sync Now'}
+              </Button>
+            </div>
           </div>
         ) : !shareUrl ? (
           <div className="space-y-4">
