@@ -48,6 +48,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import TableView from "@/components/table-view"
 import AIWorkbench from "@/components/ai-workbench"
+import { UserProfile } from "@/components/user-profile"
 import { parseCsv, stringifyCsv, isValidCsv } from "@/lib/csv"
 import { createReferenceTag, hasReferences, expandReferences } from "@/lib/document-references"
 import { Workflow, WorkflowMetadata } from '@/lib/workflow-types'
@@ -3001,69 +3002,72 @@ function transform(input, context) {
           </div>
         </div>
 
-        <div className="p-2 overflow-auto h-full pb-24 relative">
-          {/* Favorites Section */}
-          <div className="mb-4">
-            <div className="flex items-center gap-2 mb-2">
-              <Star size={12} className="text-yellow-500" />
-              <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Favorites</span>
+        <div className="flex flex-col h-full">
+          <div className="flex-1 overflow-auto p-2">
+            {/* Favorites Section */}
+            <div className="mb-4">
+              <div className="flex items-center gap-2 mb-2">
+                <Star size={12} className="text-yellow-500" />
+                <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Favorites</span>
+              </div>
+              <div className="pl-4">
+                {favorites.length === 0 ? (
+                  <div className="text-xs text-muted-foreground italic">No favorites</div>
+                ) : (
+                  favorites.map((tabId) => {
+                    const tab = tabs.find((t) => t.id === tabId)
+                    if (!tab) return null
+                    return (
+                      <div
+                        key={tabId}
+                        className={`flex items-center gap-2 py-1 px-2 hover:bg-muted/50 rounded cursor-pointer ${
+                          activeTabId === tabId ? "bg-background" : ""
+                        }`}
+                        onClick={() => {
+                          setTabs((prev) => prev.map((t) => (t.id === tabId ? { ...t, isOpen: true } : t)))
+                          setActiveTabId(tabId)
+                        }}
+                      >
+                        {(() => {
+                          const isPrompt = tab.name?.toLowerCase().endsWith('.prompt')
+                          const isWorkflow = tab.name?.toLowerCase().endsWith('.workflow')
+                          const isTable = tab.view === 'table' || tab.name?.toLowerCase().endsWith('.csv')
+                          if (isPrompt) return <Sparkles size={12} className="text-purple-500" />
+                          if (isWorkflow) return <FileCode size={12} className="text-purple-500" />
+                          if (isTable) return <TableGlyph size={12} />
+                          return <File size={12} className="text-muted-foreground" />
+                        })()}
+                        <span className="text-xs">{tab.name}</span>
+                      </div>
+                    )
+                  })
+                )}
+              </div>
             </div>
-            <div className="pl-4">
-              {favorites.length === 0 ? (
-                <div className="text-xs text-muted-foreground italic">No favorites</div>
-              ) : (
-                favorites.map((tabId) => {
-                  const tab = tabs.find((t) => t.id === tabId)
-                  if (!tab) return null
-                  return (
-                    <div
-                      key={tabId}
-                      className={`flex items-center gap-2 py-1 px-2 hover:bg-muted/50 rounded cursor-pointer ${
-                        activeTabId === tabId ? "bg-background" : ""
-                      }`}
-                      onClick={() => {
-                        setTabs((prev) => prev.map((t) => (t.id === tabId ? { ...t, isOpen: true } : t)))
-                        setActiveTabId(tabId)
-                      }}
-                    >
-                      {(() => {
-                        const isPrompt = tab.name?.toLowerCase().endsWith('.prompt')
-                        const isWorkflow = tab.name?.toLowerCase().endsWith('.workflow')
-                        const isTable = tab.view === 'table' || tab.name?.toLowerCase().endsWith('.csv')
-                        if (isPrompt) return <Sparkles size={12} className="text-purple-500" />
-                        if (isWorkflow) return <FileCode size={12} className="text-purple-500" />
-                        if (isTable) return <TableGlyph size={12} />
-                        return <File size={12} className="text-muted-foreground" />
-                      })()}
-                      <span className="text-xs">{tab.name}</span>
-                    </div>
-                  )
-                })
-              )}
+
+            {/* Folders Section */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <Folder size={12} className="text-muted-foreground" />
+                  <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Folders</span>
+                </div>
+                <button onClick={() => createNewFolder()} className="p-1 hover:bg-muted rounded" title="New folder">
+                  <FolderPlus size={12} />
+                </button>
+              </div>
+              <div>{renderFolderTree(folderStructure)}</div>
             </div>
           </div>
 
-          {/* Folders Section */}
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-2">
-                <Folder size={12} className="text-muted-foreground" />
-                <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Folders</span>
-              </div>
-              <button onClick={() => createNewFolder()} className="p-1 hover:bg-muted rounded" title="New folder">
-                <FolderPlus size={12} />
-              </button>
-            </div>
-            <div>{renderFolderTree(folderStructure)}</div>
-          </div>
-          {/* Upload area at bottom */}
-          <div className="absolute bottom-0 left-0 right-0 p-2 border-t border-border bg-background/95">
+          {/* Upload area */}
+          <div className="p-2 border-t border-border">
             <div className="text-[11px] text-muted-foreground flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <Upload size={12} className="opacity-60" />
                 <span>Drag text files here or</span>
               </div>
-              <button className="text-xs px-2 py-1 border rounded bg-white hover:bg-gray-50" onClick={() => triggerUpload('Default')} title="Upload to Default">
+              <button className="text-xs px-2 py-1 border rounded bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700" onClick={() => triggerUpload('Default')} title="Upload to Default">
                 Upload…
               </button>
             </div>
@@ -3076,6 +3080,9 @@ function transform(input, context) {
               onChange={(e) => handleFilesUpload(e.target.files, pendingUploadPath)}
             />
           </div>
+
+          {/* User Profile - Sticky at bottom */}
+          <UserProfile />
         </div>
 
         {/* Resize Handle */}
