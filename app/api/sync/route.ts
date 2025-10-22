@@ -54,8 +54,21 @@ function flattenFolders(folders: any[], parentPath: string = '', parentId: strin
     isExpanded: boolean
   }> = []
 
+  if (!folders || !Array.isArray(folders)) {
+    return result
+  }
+
   for (const folder of folders) {
-    if (folder.type === 'folder') {
+    // Skip if folder is invalid
+    if (!folder || !folder.id || !folder.name) {
+      console.warn('Skipping invalid folder:', folder)
+      continue
+    }
+
+    // Determine if this is a folder (vs a file)
+    const isFolder = folder.type === 'folder' || folder.children !== undefined
+
+    if (isFolder) {
       const path = parentPath ? `${parentPath}/${folder.name}` : `/${folder.name}`
 
       result.push({
@@ -67,8 +80,8 @@ function flattenFolders(folders: any[], parentPath: string = '', parentId: strin
       })
 
       // Recursively process children
-      if (folder.children && folder.children.length > 0) {
-        const childFolders = folder.children.filter((c: any) => c.type === 'folder')
+      if (folder.children && Array.isArray(folder.children) && folder.children.length > 0) {
+        const childFolders = folder.children.filter((c: any) => c && (c.type === 'folder' || c.children !== undefined))
         if (childFolders.length > 0) {
           result.push(...flattenFolders(childFolders, path, folder.id))
         }
@@ -80,6 +93,16 @@ function flattenFolders(folders: any[], parentPath: string = '', parentId: strin
         name: folder.name,
         parentId: folder.parentId || null,
         path: folder.path,
+        isExpanded: folder.isExpanded || false,
+      })
+    } else {
+      // Folder without type or path - generate path
+      const path = parentPath ? `${parentPath}/${folder.name}` : `/${folder.name}`
+      result.push({
+        id: folder.id,
+        name: folder.name,
+        parentId: folder.parentId || parentId || null,
+        path,
         isExpanded: folder.isExpanded || false,
       })
     }
@@ -100,6 +123,12 @@ export async function POST(request: NextRequest) {
 
     const data: SyncData = await request.json()
 
+    console.log('[Sync] Received data:', {
+      tabs: data.tabs?.length || 0,
+      folders: data.folders?.length || 0,
+      hasSettings: !!data.settings,
+    })
+
     // Sync folders first (they're needed for folder references)
     if (data.folders && data.folders.length > 0) {
       // Delete existing folders
@@ -107,6 +136,15 @@ export async function POST(request: NextRequest) {
 
       // Flatten folder tree and generate paths
       const flatFolders = flattenFolders(data.folders)
+
+      console.log('[Sync] Flattened folders:', flatFolders.length)
+
+      // Validate all folders have paths
+      const invalidFolders = flatFolders.filter(f => !f.path)
+      if (invalidFolders.length > 0) {
+        console.error('[Sync] Folders missing paths:', invalidFolders)
+        throw new Error(`${invalidFolders.length} folders are missing required path field`)
+      }
 
       // Insert new folders
       for (const folder of flatFolders) {
