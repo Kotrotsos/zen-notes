@@ -5,8 +5,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Loader2, Copy, Check, RefreshCw } from 'lucide-react'
+import { Loader2, Copy, Check, RefreshCw, AlertCircle } from 'lucide-react'
 import { generateShareableSlugs } from '@/lib/url-generator'
+import { useAuth } from '@/lib/auth-context'
 
 interface ShareDialogProps {
   open: boolean
@@ -16,12 +17,16 @@ interface ShareDialogProps {
 }
 
 export function ShareDialog({ open, onOpenChange, documentId, documentName }: ShareDialogProps) {
+  const { user } = useAuth()
   const [loading, setLoading] = useState(false)
   const [shareUrl, setShareUrl] = useState('')
   const [copied, setCopied] = useState(false)
   const [slugOptions, setSlugOptions] = useState<string[]>([])
   const [selectedSlug, setSelectedSlug] = useState('')
   const [error, setError] = useState('')
+
+  // Check if documentId is a local ID (like "tab-1") vs database UUID
+  const isLocalDocument = documentId.startsWith('tab-')
 
   useEffect(() => {
     if (open) {
@@ -93,7 +98,34 @@ export function ShareDialog({ open, onOpenChange, documentId, documentName }: Sh
           </DialogDescription>
         </DialogHeader>
 
-        {!shareUrl ? (
+        {!user ? (
+          <div className="space-y-4">
+            <div className="flex items-start gap-3 p-4 bg-amber-50 dark:bg-amber-900/20 text-amber-800 dark:text-amber-200 rounded">
+              <AlertCircle className="h-5 w-5 mt-0.5 shrink-0" />
+              <div className="space-y-2">
+                <p className="text-sm font-medium">Sign in required</p>
+                <p className="text-sm">You need to be signed in to share documents. Please sign in or create an account to continue.</p>
+              </div>
+            </div>
+            <Button onClick={handleClose} className="w-full">
+              Close
+            </Button>
+          </div>
+        ) : isLocalDocument ? (
+          <div className="space-y-4">
+            <div className="flex items-start gap-3 p-4 bg-amber-50 dark:bg-amber-900/20 text-amber-800 dark:text-amber-200 rounded">
+              <AlertCircle className="h-5 w-5 mt-0.5 shrink-0" />
+              <div className="space-y-2">
+                <p className="text-sm font-medium">Document not synced</p>
+                <p className="text-sm">This document only exists locally. To share it, you need to sync your data to the cloud first.</p>
+                <p className="text-sm text-muted-foreground">Tip: Your data will automatically sync when you log in for the first time, or you can implement a manual sync button.</p>
+              </div>
+            </div>
+            <Button onClick={handleClose} className="w-full">
+              Close
+            </Button>
+          </div>
+        ) : !shareUrl ? (
           <div className="space-y-4">
             {error && (
               <div className="p-3 text-sm bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 rounded">
