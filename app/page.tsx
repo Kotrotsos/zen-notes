@@ -49,6 +49,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import TableView from "@/components/table-view"
 import AIWorkbench from "@/components/ai-workbench"
 import { UserProfile } from "@/components/user-profile"
+import { ShareDialog } from "@/components/share-dialog"
 import { parseCsv, stringifyCsv, isValidCsv } from "@/lib/csv"
 import { createReferenceTag, hasReferences, expandReferences } from "@/lib/document-references"
 import { Workflow, WorkflowMetadata } from '@/lib/workflow-types'
@@ -249,6 +250,8 @@ export default function ZenNotes() {
   const [editingName, setEditingName] = useState("")
   const [showSaveTabDialog, setShowSaveTabDialog] = useState(false)
   const [saveTabId, setSaveTabId] = useState<string | null>(null)
+  const [showShareDialog, setShowShareDialog] = useState(false)
+  const [shareTabId, setShareTabId] = useState<string | null>(null)
   const [showMarkdownPreview, setShowMarkdownPreview] = useState(
     () => (typeof initialUI.showMarkdownPreview === "boolean" ? initialUI.showMarkdownPreview : false),
   )
@@ -2964,6 +2967,16 @@ function transform(input, context) {
         </DialogContent>
       </Dialog>
 
+      {/* Share Dialog */}
+      {shareTabId && (
+        <ShareDialog
+          open={showShareDialog}
+          onOpenChange={setShowShareDialog}
+          documentId={shareTabId}
+          documentName={tabs.find(t => t.id === shareTabId)?.name || 'Untitled'}
+        />
+      )}
+
       {/* Explorer trigger button - only show when not pinned and not visible */}
       {!showFileExplorer && !pinnedExplorer && (
         <button
@@ -3203,6 +3216,18 @@ function transform(input, context) {
               title={showExpandedView ? "Exit Expanded View" : "Show Expanded View (with references)"}
             >
               <FileInput size={16} />
+            </button>
+          )}
+          {activeTab && (
+            <button
+              onClick={() => {
+                setShareTabId(activeTabId)
+                setShowShareDialog(true)
+              }}
+              className="p-2 hover:bg-muted/40 rounded"
+              title="Share this document"
+            >
+              <Link2 size={16} />
             </button>
           )}
           <button
