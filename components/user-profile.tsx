@@ -4,15 +4,8 @@ import { useState } from 'react'
 import { useAuth } from '@/lib/auth-context'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { LogOut, Settings, User } from 'lucide-react'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 import { LoginDialog, RegisterDialog, ForgotPasswordDialog } from './auth-dialogs'
 
 export function UserProfile() {
@@ -20,6 +13,7 @@ export function UserProfile() {
   const [loginOpen, setLoginOpen] = useState(false)
   const [registerOpen, setRegisterOpen] = useState(false)
   const [forgotPasswordOpen, setForgotPasswordOpen] = useState(false)
+  const [profileOpen, setProfileOpen] = useState(false)
 
   const getInitials = (name: string) => {
     return name
@@ -94,49 +88,83 @@ export function UserProfile() {
   }
 
   return (
-    <div className="sticky bottom-0 left-0 right-0 border-t bg-background">
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            variant="ghost"
-            className="w-full justify-start gap-3 p-3 h-auto hover:bg-accent"
-          >
-            <Avatar className="h-8 w-8">
-              <AvatarImage src={user.avatarUrl || undefined} alt={user.username} />
-              <AvatarFallback className="text-xs">
-                {getInitials(user.username)}
-              </AvatarFallback>
-            </Avatar>
-            <div className="flex-1 text-left overflow-hidden">
-              <div className="text-sm font-medium truncate">{user.username}</div>
-              <div className="text-xs text-muted-foreground truncate">{user.email}</div>
-            </div>
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent
-          side="top"
-          align="start"
-          sideOffset={8}
-          collisionPadding={8}
-          className="w-56 z-[100]"
+    <>
+      <div className="sticky bottom-0 left-0 right-0 border-t bg-background">
+        <Button
+          variant="ghost"
+          className="w-full justify-start gap-3 p-3 h-auto hover:bg-accent"
+          onClick={() => setProfileOpen(true)}
         >
-          <DropdownMenuLabel>My Account</DropdownMenuLabel>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem disabled>
-            <User className="mr-2 h-4 w-4" />
-            Profile
-          </DropdownMenuItem>
-          <DropdownMenuItem disabled>
-            <Settings className="mr-2 h-4 w-4" />
-            Settings
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem onClick={logout} className="text-red-600 dark:text-red-400">
-            <LogOut className="mr-2 h-4 w-4" />
-            Sign Out
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </div>
+          <Avatar className="h-8 w-8">
+            <AvatarImage src={user.avatarUrl || undefined} alt={user.username} />
+            <AvatarFallback className="text-xs">
+              {getInitials(user.username)}
+            </AvatarFallback>
+          </Avatar>
+          <div className="flex-1 text-left overflow-hidden">
+            <div className="text-sm font-medium truncate">{user.username}</div>
+            <div className="text-xs text-muted-foreground truncate">{user.email}</div>
+          </div>
+        </Button>
+      </div>
+
+      <Dialog open={profileOpen} onOpenChange={setProfileOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Account</DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="flex items-center gap-4">
+              <Avatar className="h-16 w-16">
+                <AvatarImage src={user.avatarUrl || undefined} alt={user.username} />
+                <AvatarFallback className="text-lg">
+                  {getInitials(user.username)}
+                </AvatarFallback>
+              </Avatar>
+              <div className="flex-1">
+                <div className="font-medium">{user.username}</div>
+                <div className="text-sm text-muted-foreground">{user.email}</div>
+              </div>
+            </div>
+
+            <div className="space-y-2 pt-4 border-t">
+              <Button
+                variant="outline"
+                className="w-full justify-start"
+                disabled
+              >
+                <User className="mr-2 h-4 w-4" />
+                Edit Profile
+                <span className="ml-auto text-xs text-muted-foreground">Coming soon</span>
+              </Button>
+              <Button
+                variant="outline"
+                className="w-full justify-start"
+                disabled
+              >
+                <Settings className="mr-2 h-4 w-4" />
+                Settings
+                <span className="ml-auto text-xs text-muted-foreground">Coming soon</span>
+              </Button>
+            </div>
+
+            <div className="pt-4 border-t">
+              <Button
+                variant="destructive"
+                className="w-full"
+                onClick={() => {
+                  logout()
+                  setProfileOpen(false)
+                }}
+              >
+                <LogOut className="mr-2 h-4 w-4" />
+                Sign Out
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }
