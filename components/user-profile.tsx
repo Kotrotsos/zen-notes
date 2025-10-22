@@ -113,7 +113,13 @@ export function UserProfile() {
             </div>
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent side="top" align="start" className="w-56 z-[100]">
+        <DropdownMenuContent
+          side="top"
+          align="start"
+          sideOffset={8}
+          collisionPadding={8}
+          className="w-56 z-[100]"
+        >
           <DropdownMenuLabel>My Account</DropdownMenuLabel>
           <DropdownMenuSeparator />
           <DropdownMenuItem disabled>
