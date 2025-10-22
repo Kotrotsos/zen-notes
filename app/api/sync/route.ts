@@ -3,6 +3,14 @@ import { db, schema } from '@/lib/db'
 import { getCurrentUser } from '@/lib/auth'
 import { eq } from 'drizzle-orm'
 
+interface FolderItem {
+  id: string
+  name: string
+  type: 'folder'
+  children?: any[]
+  isExpanded?: boolean
+}
+
 interface SyncData {
   tabs: Array<{
     id: string
@@ -13,11 +21,11 @@ interface SyncData {
     isOpen?: boolean
     isFavorite?: boolean
   }>
-  folders: Array<{
+  folders: Array<FolderItem | {
     id: string
     name: string
     parentId?: string
-    path: string
+    path?: string
     isExpanded?: boolean
   }>
   settings?: {
@@ -28,6 +36,56 @@ interface SyncData {
     appPrefs?: any
     uiState?: any
   }
+}
+
+// Helper to flatten folder tree and generate paths
+function flattenFolders(folders: any[], parentPath: string = '', parentId: string | null = null): Array<{
+  id: string
+  name: string
+  parentId: string | null
+  path: string
+  isExpanded: boolean
+}> {
+  const result: Array<{
+    id: string
+    name: string
+    parentId: string | null
+    path: string
+    isExpanded: boolean
+  }> = []
+
+  for (const folder of folders) {
+    if (folder.type === 'folder') {
+      const path = parentPath ? `${parentPath}/${folder.name}` : `/${folder.name}`
+
+      result.push({
+        id: folder.id,
+        name: folder.name,
+        parentId,
+        path,
+        isExpanded: folder.isExpanded || false,
+      })
+
+      // Recursively process children
+      if (folder.children && folder.children.length > 0) {
+        const childFolders = folder.children.filter((c: any) => c.type === 'folder')
+        if (childFolders.length > 0) {
+          result.push(...flattenFolders(childFolders, path, folder.id))
+        }
+      }
+    } else if (folder.path) {
+      // Already a flat folder with path
+      result.push({
+        id: folder.id,
+        name: folder.name,
+        parentId: folder.parentId || null,
+        path: folder.path,
+        isExpanded: folder.isExpanded || false,
+      })
+    }
+  }
+
+  return result
 }
 
 export async function POST(request: NextRequest) {
@@ -47,14 +105,17 @@ export async function POST(request: NextRequest) {
       // Delete existing folders
       await db.delete(schema.folders).where(eq(schema.folders.userId, user.id))
 
+      // Flatten folder tree and generate paths
+      const flatFolders = flattenFolders(data.folders)
+
       // Insert new folders
-      for (const folder of data.folders) {
+      for (const folder of flatFolders) {
         await db.insert(schema.folders).values({
           userId: user.id,
           name: folder.name,
-          parentId: folder.parentId || null,
+          parentId: folder.parentId,
           path: folder.path,
-          isExpanded: folder.isExpanded || false,
+          isExpanded: folder.isExpanded,
         })
       }
     }
