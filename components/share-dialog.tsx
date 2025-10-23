@@ -5,7 +5,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Loader2, Copy, Check, RefreshCw, AlertCircle } from 'lucide-react'
+import { Loader2, Copy, Check, RefreshCw, AlertCircle, Trash2 } from 'lucide-react'
 import { generateShareableSlugs } from '@/lib/url-generator'
 import { useAuth } from '@/lib/auth-context'
 
@@ -21,22 +21,56 @@ export function ShareDialog({ open, onOpenChange, documentId, documentName }: Sh
   const [loading, setLoading] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [shareUrl, setShareUrl] = useState('')
+  const [existingShareLink, setExistingShareLink] = useState<any>(null)
   const [copied, setCopied] = useState(false)
   const [slugOptions, setSlugOptions] = useState<string[]>([])
   const [selectedSlug, setSelectedSlug] = useState('')
   const [error, setError] = useState('')
+  const [checkingExisting, setCheckingExisting] = useState(false)
+  const [removing, setRemoving] = useState(false)
 
   // Check if documentId is a local ID (like "tab-1") vs database UUID
   const isLocalDocument = documentId.startsWith('tab-')
 
   useEffect(() => {
-    if (open) {
+    if (open && user && !isLocalDocument) {
+      // Check if document already has a share link
+      checkExistingShare()
+    } else if (open) {
       // Generate slug options when dialog opens
       const slugs = generateShareableSlugs(5)
       setSlugOptions(slugs)
       setSelectedSlug(slugs[0])
     }
-  }, [open])
+  }, [open, documentId, user])
+
+  const checkExistingShare = async () => {
+    setCheckingExisting(true)
+    setError('')
+
+    try {
+      const response = await fetch(`/api/share?documentId=${documentId}`)
+      const data = await response.json()
+
+      if (response.ok && data.success && data.shareLink) {
+        setExistingShareLink(data.shareLink)
+        setShareUrl(data.url)
+      } else {
+        // No existing share, generate slug options
+        const slugs = generateShareableSlugs(5)
+        setSlugOptions(slugs)
+        setSelectedSlug(slugs[0])
+      }
+    } catch (err) {
+      console.error('Failed to check existing share:', err)
+      // On error, just show create UI
+      const slugs = generateShareableSlugs(5)
+      setSlugOptions(slugs)
+      setSelectedSlug(slugs[0])
+    } finally {
+      setCheckingExisting(false)
+    }
+  }
 
   const generateNewOptions = () => {
     const slugs = generateShareableSlugs(5)
@@ -84,10 +118,63 @@ export function ShareDialog({ open, onOpenChange, documentId, documentName }: Sh
 
   const handleClose = () => {
     setShareUrl('')
+    setExistingShareLink(null)
     setCopied(false)
     setError('')
     setSyncing(false)
+    setRemoving(false)
     onOpenChange(false)
+  }
+
+  const handleRemoveShare = async () => {
+    setRemoving(true)
+    setError('')
+
+    try {
+      const response = await fetch('/api/share', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ documentId }),
+      })
+
+      const data = await response.json()
+
+      if (response.ok) {
+        // Successfully removed, close dialog
+        handleClose()
+      } else {
+        setError(data.error || 'Failed to remove share link')
+      }
+    } catch (err) {
+      setError('Failed to remove share link')
+    } finally {
+      setRemoving(false)
+    }
+  }
+
+  const handleRegenerateShare = async () => {
+    setError('')
+    setLoading(true)
+
+    try {
+      // First, remove the existing share
+      await fetch('/api/share', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ documentId }),
+      })
+
+      // Then create a new one
+      const slugs = generateShareableSlugs(5)
+      setSlugOptions(slugs)
+      setSelectedSlug(slugs[0])
+      setExistingShareLink(null)
+      setShareUrl('')
+    } catch (err) {
+      setError('Failed to regenerate share link')
+    } finally {
+      setLoading(false)
+    }
   }
 
   const handleSyncNow = async () => {
@@ -137,8 +224,9 @@ export function ShareDialog({ open, onOpenChange, documentId, documentName }: Sh
             throw new Error(data.error || 'Sync failed')
           }
 
-          // Reload the page to get fresh data with database IDs
-          window.location.reload()
+          // Close the dialog - the app will automatically reload data from the database
+          setSyncing(false)
+          onOpenChange(false)
         }
 
         getRequest.onerror = () => {
@@ -161,9 +249,14 @@ export function ShareDialog({ open, onOpenChange, documentId, documentName }: Sh
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Share Document</DialogTitle>
+          <DialogTitle>
+            {existingShareLink && !shareUrl ? 'Manage Share' : 'Share Document'}
+          </DialogTitle>
           <DialogDescription>
-            Create a public link for: {documentName}
+            {existingShareLink && !shareUrl
+              ? `Manage public link for: ${documentName}`
+              : `Create a public link for: ${documentName}`
+            }
           </DialogDescription>
         </DialogHeader>
 
@@ -202,6 +295,91 @@ export function ShareDialog({ open, onOpenChange, documentId, documentName }: Sh
               <Button onClick={handleSyncNow} className="flex-1" disabled={syncing}>
                 {syncing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 {syncing ? 'Syncing...' : 'Sync Now'}
+              </Button>
+            </div>
+          </div>
+        ) : checkingExisting ? (
+          <div className="flex items-center justify-center py-8">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          </div>
+        ) : existingShareLink && !shareUrl ? (
+          <div className="space-y-4">
+            {error && (
+              <div className="p-3 text-sm bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 rounded">
+                {error}
+              </div>
+            )}
+
+            <div className="p-3 bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 rounded text-sm">
+              This document is already shared
+            </div>
+
+            <div className="space-y-2">
+              <Label>Current Share URL</Label>
+              <div className="flex gap-2">
+                <Input
+                  value={`${window.location.origin}/${existingShareLink.slug}`}
+                  readOnly
+                  className="font-mono text-sm"
+                />
+                <Button
+                  onClick={() => {
+                    navigator.clipboard.writeText(`${window.location.origin}/${existingShareLink.slug}`)
+                    setCopied(true)
+                    setTimeout(() => setCopied(false), 2000)
+                  }}
+                  variant="outline"
+                  size="icon"
+                  className="shrink-0"
+                >
+                  {copied ? (
+                    <Check className="h-4 w-4 text-green-600" />
+                  ) : (
+                    <Copy className="h-4 w-4" />
+                  )}
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Anyone with this link can view this document
+              </p>
+            </div>
+
+            <div className="pt-2 space-y-2">
+              <Button
+                onClick={handleRegenerateShare}
+                variant="outline"
+                className="w-full"
+                disabled={loading}
+              >
+                {loading ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Regenerating...
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="mr-2 h-4 w-4" />
+                    Regenerate Link
+                  </>
+                )}
+              </Button>
+              <Button
+                onClick={handleRemoveShare}
+                variant="destructive"
+                className="w-full"
+                disabled={removing}
+              >
+                {removing ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Removing...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="mr-2 h-4 w-4" />
+                    Remove Share
+                  </>
+                )}
               </Button>
             </div>
           </div>
@@ -295,9 +473,29 @@ export function ShareDialog({ open, onOpenChange, documentId, documentName }: Sh
               </p>
             </div>
 
-            <Button onClick={handleClose} className="w-full">
-              Done
-            </Button>
+            <div className="space-y-2">
+              <Button onClick={handleClose} className="w-full">
+                Done
+              </Button>
+              <Button
+                onClick={handleRemoveShare}
+                variant="outline"
+                className="w-full"
+                disabled={removing}
+              >
+                {removing ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Removing...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="mr-2 h-4 w-4" />
+                    Remove Share
+                  </>
+                )}
+              </Button>
+            </div>
           </div>
         )}
       </DialogContent>

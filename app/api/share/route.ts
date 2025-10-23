@@ -113,8 +113,8 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// Get all share links for current user
-export async function GET() {
+// Get all share links for current user OR check if specific document has a share link
+export async function GET(request: NextRequest) {
   try {
     const user = await getCurrentUser()
     if (!user) {
@@ -124,6 +124,38 @@ export async function GET() {
       )
     }
 
+    const { searchParams } = new URL(request.url)
+    const documentId = searchParams.get('documentId')
+
+    // If documentId is provided, check if this specific document has a share link
+    if (documentId) {
+      const [existingLink] = await db
+        .select()
+        .from(schema.sharedLinks)
+        .where(
+          and(
+            eq(schema.sharedLinks.documentId, documentId),
+            eq(schema.sharedLinks.userId, user.id),
+            eq(schema.sharedLinks.isActive, true)
+          )
+        )
+        .limit(1)
+
+      if (existingLink) {
+        return NextResponse.json({
+          success: true,
+          shareLink: existingLink,
+          url: `${process.env.NEXTAUTH_URL || 'http://localhost:3000'}/${existingLink.slug}`,
+        })
+      } else {
+        return NextResponse.json({
+          success: true,
+          shareLink: null,
+        })
+      }
+    }
+
+    // Otherwise, return all share links for the user
     const shareLinks = await db
       .select({
         id: schema.sharedLinks.id,
@@ -162,12 +194,27 @@ export async function DELETE(request: NextRequest) {
       )
     }
 
-    const { shareLinkId } = await request.json()
+    const { shareLinkId, documentId } = await request.json()
 
-    if (!shareLinkId) {
+    if (!shareLinkId && !documentId) {
       return NextResponse.json(
-        { error: 'Share link ID is required' },
+        { error: 'Share link ID or document ID is required' },
         { status: 400 }
+      )
+    }
+
+    // Build the where condition
+    let whereCondition
+    if (shareLinkId) {
+      whereCondition = and(
+        eq(schema.sharedLinks.id, shareLinkId),
+        eq(schema.sharedLinks.userId, user.id)
+      )
+    } else {
+      whereCondition = and(
+        eq(schema.sharedLinks.documentId, documentId),
+        eq(schema.sharedLinks.userId, user.id),
+        eq(schema.sharedLinks.isActive, true)
       )
     }
 
@@ -175,12 +222,7 @@ export async function DELETE(request: NextRequest) {
     const [shareLink] = await db
       .select()
       .from(schema.sharedLinks)
-      .where(
-        and(
-          eq(schema.sharedLinks.id, shareLinkId),
-          eq(schema.sharedLinks.userId, user.id)
-        )
-      )
+      .where(whereCondition)
       .limit(1)
 
     if (!shareLink) {
@@ -194,7 +236,7 @@ export async function DELETE(request: NextRequest) {
     await db
       .update(schema.sharedLinks)
       .set({ isActive: false })
-      .where(eq(schema.sharedLinks.id, shareLinkId))
+      .where(eq(schema.sharedLinks.id, shareLink.id))
 
     return NextResponse.json({
       success: true,

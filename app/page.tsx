@@ -50,6 +50,8 @@ import TableView from "@/components/table-view"
 import AIWorkbench from "@/components/ai-workbench"
 import { UserProfile } from "@/components/user-profile"
 import { ShareDialog } from "@/components/share-dialog"
+import { SplashScreen } from "@/components/splash-screen"
+import { useAuth } from "@/lib/auth-context"
 import { parseCsv, stringifyCsv, isValidCsv } from "@/lib/csv"
 import { createReferenceTag, hasReferences, expandReferences } from "@/lib/document-references"
 import { Workflow, WorkflowMetadata } from '@/lib/workflow-types'
@@ -242,6 +244,7 @@ export default function ZenNotes() {
     }
   }
   const initialUI = getInitialUIState() as Partial<UIState>
+  const { user } = useAuth()
   const [tabs, setTabs] = useState<Tab[]>([])
   const [activeTabId, setActiveTabId] = useState<string>("")
   const [availableWorkflows, setAvailableWorkflows] = useState<Workflow[]>([])
@@ -269,6 +272,7 @@ export default function ZenNotes() {
   const [isDragging, setIsDragging] = useState(false)
   const [showStartMenu, setShowStartMenu] = useState(false)
   const [showEditorSettings, setShowEditorSettings] = useState(false)
+  const [showSplash, setShowSplash] = useState(false)
   const [showFileExplorer, setShowFileExplorer] = useState(() => {
     const base = typeof initialUI.showFileExplorer === "boolean" ? initialUI.showFileExplorer : false
     // Ensure explorer is visible when pinned
@@ -910,35 +914,174 @@ function transform(input, context) {
     })
   }
 
-  useEffect(() => {
-    const applyAppData = (savedData: AppData) => {
-      setTabs(savedData.tabs)
-      setActiveTabId(savedData.activeTabId)
-      if (savedData.editorSettings) setEditorSettings(savedData.editorSettings)
-      if (savedData.folderStructure) {
-        setFolderStructure(savedData.folderStructure)
+  // Helper function to convert flat folders from database to hierarchical structure
+  const buildFolderTree = (flatFolders: any[]): FolderItem[] => {
+    if (!flatFolders || flatFolders.length === 0) return []
+
+    // Create a map for quick lookup
+    const folderMap = new Map<string, FolderItem>()
+    const rootFolders: FolderItem[] = []
+
+    // First pass: create all folder objects
+    flatFolders.forEach((dbFolder) => {
+      const folder: FolderItem = {
+        id: dbFolder.id,
+        name: dbFolder.name,
+        type: 'folder',
+        children: [],
+        isExpanded: dbFolder.isExpanded || false,
+      }
+      folderMap.set(dbFolder.id, folder)
+    })
+
+    // Second pass: build the hierarchy
+    flatFolders.forEach((dbFolder) => {
+      const folder = folderMap.get(dbFolder.id)
+      if (!folder) return
+
+      if (dbFolder.parentId) {
+        const parent = folderMap.get(dbFolder.parentId)
+        if (parent) {
+          parent.children.push(folder)
+        } else {
+          rootFolders.push(folder)
+        }
       } else {
-        const defaultFolder = createDefaultFolder()
-        savedData.tabs.forEach((tab) => {
-          defaultFolder.children.push({ id: `file-${tab.id}`, name: tab.name, type: 'file', tabId: tab.id })
-        })
-        setFolderStructure([defaultFolder])
+        rootFolders.push(folder)
       }
-      if (savedData.favorites) setFavorites(savedData.favorites)
-      if (savedData.previewSettings) setPreviewSettings(savedData.previewSettings)
-      if ((savedData as any).copilotSettings) {
-        setCopilotSettings((savedData as any).copilotSettings)
-        setCopilotModel((savedData as any).copilotSettings.defaultModel || 'gpt-4.1')
-      }
-      if ((savedData as any).settings && (savedData as any).settings.copilotModel) {
-        setCopilotModel((savedData as any).settings.copilotModel)
-      }
+    })
+
+    return rootFolders
+  }
+
+  // Apply app data to state
+  const applyAppData = (savedData: AppData) => {
+    setTabs(savedData.tabs)
+    setActiveTabId(savedData.activeTabId)
+    if (savedData.editorSettings) setEditorSettings(savedData.editorSettings)
+    if (savedData.folderStructure) {
+      setFolderStructure(savedData.folderStructure)
+    } else {
+      const defaultFolder = createDefaultFolder()
+      savedData.tabs.forEach((tab) => {
+        defaultFolder.children.push({ id: `file-${tab.id}`, name: tab.name, type: 'file', tabId: tab.id })
+      })
+      setFolderStructure([defaultFolder])
     }
+    if (savedData.favorites) setFavorites(savedData.favorites)
+    if (savedData.previewSettings) setPreviewSettings(savedData.previewSettings)
+    if ((savedData as any).copilotSettings) {
+      setCopilotSettings((savedData as any).copilotSettings)
+      setCopilotModel((savedData as any).copilotSettings.defaultModel || 'gpt-4.1')
+    }
+    if ((savedData as any).settings && (savedData as any).settings.copilotModel) {
+      setCopilotModel((savedData as any).settings.copilotModel)
+    }
+  }
+
+  // Load data from database (when logged in)
+  const loadFromDatabase = async (): Promise<AppData | null> => {
+    try {
+      const response = await fetch('/api/sync')
+      if (!response.ok) {
+        console.error('Failed to fetch from database:', response.statusText)
+        return null
+      }
+
+      const { success, data } = await response.json()
+      if (!success || !data) return null
+
+      const { documents, folders, settings } = data
+
+      // Convert database documents to tabs
+      const tabs: Tab[] = documents.map((doc: any) => ({
+        id: doc.id, // Use database UUID instead of local ID
+        name: doc.name,
+        content: doc.content,
+        folderPath: doc.folderPath || undefined,
+        view: doc.view || 'text',
+        isOpen: doc.isOpen !== false,
+        isFavorite: doc.isFavorite || false,
+      }))
+
+      // Convert flat folders to hierarchical structure
+      const folderStructure = buildFolderTree(folders)
+
+      // Add files to their respective folders
+      tabs.forEach((tab) => {
+        if (!tab.folderPath) return
+
+        // Find the folder by path
+        const findFolder = (folders: FolderItem[], path: string): FolderItem | null => {
+          for (const folder of folders) {
+            if (`/${folder.name}` === path || folder.name === path.replace(/^\//, '')) {
+              return folder
+            }
+            if (folder.children.length > 0) {
+              const found = findFolder(folder.children as FolderItem[], path)
+              if (found) return found
+            }
+          }
+          return null
+        }
+
+        const targetFolder = findFolder(folderStructure, tab.folderPath)
+        if (targetFolder) {
+          targetFolder.children.push({
+            id: `file-${tab.id}`,
+            name: tab.name,
+            type: 'file',
+            tabId: tab.id,
+            isFavorite: tab.isFavorite,
+          })
+        }
+      })
+
+      // Find the first open tab or just use the first tab
+      const activeTab = tabs.find(t => t.isOpen) || tabs[0]
+
+      return {
+        tabs,
+        activeTabId: activeTab?.id || '',
+        folderStructure,
+        editorSettings: settings?.editorSettings,
+        previewSettings: settings?.previewSettings,
+        copilotSettings: settings?.copilotSettings,
+        modelsSettings: settings?.modelsSettings,
+        appPrefs: settings?.appPrefs,
+        uiState: settings?.uiState,
+      }
+    } catch (error) {
+      console.error('Failed to load from database:', error)
+      return null
+    }
+  }
+
+  useEffect(() => {
 
     const initApp = async () => {
       try {
         dbRef.current = await initDB()
-        const savedData = await loadFromIndexedDB()
+
+        let savedData: AppData | null = null
+
+        // If user is logged in, try to load from database first
+        if (user) {
+          console.log('User is logged in, loading from database...')
+          savedData = await loadFromDatabase()
+
+          // If database load was successful, also save to IndexedDB for offline access
+          if (savedData && savedData.tabs.length > 0) {
+            console.log('Loaded from database:', savedData.tabs.length, 'tabs')
+            await saveToIndexedDB(savedData)
+          }
+        }
+
+        // If not logged in or database load failed, load from IndexedDB
+        if (!savedData) {
+          console.log('Loading from IndexedDB...')
+          savedData = await loadFromIndexedDB()
+        }
 
         if (savedData && savedData.tabs.length > 0) {
           applyAppData(savedData)
@@ -964,7 +1107,7 @@ function transform(input, context) {
           setFolderStructure([defaultFolder])
         }
       } catch (error) {
-        console.error("Failed to initialize IndexedDB:", error)
+        console.error("Failed to initialize app:", error)
         // Fallback to default tab
         const defaultTab: Tab = {
           id: "tab-1",
@@ -991,6 +1134,38 @@ function transform(input, context) {
 
     initApp()
   }, [])
+
+  // Check if user has seen splash screen
+  useEffect(() => {
+    const hasSeenSplash = localStorage.getItem('zen-notes-seen-splash')
+    if (!hasSeenSplash && isLoaded) {
+      // Show splash after a brief delay so app loads first
+      setTimeout(() => setShowSplash(true), 500)
+    }
+  }, [isLoaded])
+
+  // Reload data when user logs in or out
+  useEffect(() => {
+    if (isLoaded) {
+      // Re-initialize the app when user state changes
+      const reloadData = async () => {
+        let savedData: AppData | null = null
+
+        if (user) {
+          console.log('User logged in, reloading from database...')
+          savedData = await loadFromDatabase()
+
+          if (savedData && savedData.tabs.length > 0) {
+            console.log('Loaded from database:', savedData.tabs.length, 'tabs')
+            await saveToIndexedDB(savedData)
+            applyAppData(savedData)
+          }
+        }
+      }
+
+      reloadData()
+    }
+  }, [user])
 
   // Load settings from localStorage (fast path) on first mount
   useEffect(() => {
@@ -2977,6 +3152,12 @@ function transform(input, context) {
         />
       )}
 
+      {/* Splash Screen */}
+      <SplashScreen
+        open={showSplash}
+        onOpenChange={setShowSplash}
+      />
+
       {/* Explorer trigger button - only show when not pinned and not visible */}
       {!showFileExplorer && !pinnedExplorer && (
         <button
@@ -4825,11 +5006,14 @@ function transform(input, context) {
             <div className="border-t border-border my-1"></div>
 
             <button
-              onClick={() => setShowStartMenu(false)}
+              onClick={() => {
+                setShowSplash(true)
+                setShowStartMenu(false)
+              }}
               className="w-full px-4 py-2 text-left text-sm hover:bg-muted flex items-center gap-3"
             >
               <Info size={14} />
-              About Notee
+              About Zen Notes
               <span className="ml-auto text-xs text-muted-foreground">v1.0</span>
             </button>
           </div>
